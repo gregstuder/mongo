@@ -1012,7 +1012,7 @@ namespace mongo {
                 }
                 // Re-check shard version after 1st retry
                 if( retry > 0 ){
-                    forceRemoteCheckShardVersionCB( fullns );
+                    versionManager.forceRemoteCheckShardVersionCB( fullns );
                 }
 
                 DBConfigPtr conf = grid.getDBConfig( dbName , false );
