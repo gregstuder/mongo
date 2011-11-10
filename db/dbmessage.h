@@ -260,6 +260,66 @@ namespace mongo {
             }
             queryOptions = d.msg().header()->dataAsInt();
         }
+
+        QueryMessage() : ns( NULL ), ntoskip( 0 ), ntoreturn( 0 ), queryOptions( 0 ) {}
+
+        bool isEmpty(){ return ns == NULL; }
+
+     };
+
+     class ScopedQueryMessage : public QueryMessage {
+     public:
+         string nsData;
+         Query queryObj;
+
+         // TODO: Rename fields so we can have good method names
+         ScopedQueryMessage( const QueryMessage& qMess ) : QueryMessage( qMess ) {
+             nsData = string( qMess.ns );
+             ns = nsData.c_str();
+             query = query.getOwned();
+             fields = fields.getOwned();
+             queryObj = Query( query );
+         }
+
+         ScopedQueryMessage(const string& nsStr,
+                            BSONObj query, BSONObj fields,
+                            int ntoskip, int ntoreturn, int queryOptions)
+          : QueryMessage()
+         {
+             nsData = nsStr;
+             ns = nsData.c_str();
+             this->ntoskip = ntoskip;
+             this->ntoreturn = ntoreturn;
+             this->queryOptions = queryOptions;
+             this->query = query.getOwned();
+             this->fields = fields.getOwned();
+             queryObj = Query( query );
+         }
+
+         ScopedQueryMessage() : QueryMessage() {}
+
+         BSONObj filter(){
+             return queryObj.getFilter();
+         }
+
+         BSONObj hint(){
+             return queryObj.getHint();
+         }
+
+         BSONObj sort(){
+             return queryObj.getSort();
+         }
+
+         BSONObj include(){ return fields; }
+
+         string nspace(){ return nsData; }
+
+         int numtoskip(){ return ntoskip; }
+
+         int numtoreturn(){ return ntoreturn; }
+
+         int options(){ return queryOptions; }
+
     };
 
     void replyToQuery(int queryResultFlags,

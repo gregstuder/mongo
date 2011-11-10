@@ -23,6 +23,7 @@
 #include "../db/dbmessage.h"
 #include "../s/util.h"
 #include "../s/shard.h"
+#include "../s/chunk.h"
 
 namespace mongo {
 
@@ -361,6 +362,37 @@ namespace mongo {
         _sortKey = q.getSort().copy();
         _needToSkip = 0;
         _finishCons();
+    }
+
+    ParallelSortClusteredCursor::ParallelSortClusteredCursor( const QueryMessage& qMess, const CommandInfo& cInfo, ChunkManagerPtr info )
+        : ClusteredCursor( *((QueryMessage*)&qMess) ),
+          _qMess( qMess ), _cInfo( cInfo )
+    {
+        // Handle legacy stuff
+        set<Shard> shards;
+        assert( info );
+        info->getShardsForQuery( shards , _qMess.filter() );
+
+        for ( set<Shard>::iterator i = shards.begin(); i != shards.end(); i++ ) {
+            _servers.insert( ServerAndQuery( i->getConnString() , BSONObj() ) );
+        }
+
+        if ( logLevel > 4 ) {
+            StringBuilder ss;
+            ss << " shard query servers: " << _servers.size() << '\n';
+            for ( set<ServerAndQuery>::iterator i = _servers.begin(); i!=_servers.end(); i++ ) {
+                const ServerAndQuery& s = *i;
+                ss << "       " << s.toString() << '\n';
+            }
+            log() << ss.str() << endl;
+        }
+
+        _needToSkip = _qMess.numtoskip();
+        _cursors = 0;
+        _sortKey = _qMess.sort();
+        _fields = _qMess.include();
+        _finishCons();
+        _qMess.fields = _fields;
     }
 
     void ParallelSortClusteredCursor::_finishCons() {

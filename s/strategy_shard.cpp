@@ -42,34 +42,7 @@ namespace mongo {
             if ( q.ntoreturn == 1 && strstr(q.ns, ".$cmd") )
                 throw UserException( 8010 , "something is wrong, shouldn't see a command here" );
 
-            ChunkManagerPtr info = r.getChunkManager();
-            assert( info );
-
-            Query query( q.query );
-
-            set<Shard> shards;
-            info->getShardsForQuery( shards , query.getFilter()  );
-
-            set<ServerAndQuery> servers;
-            for ( set<Shard>::iterator i = shards.begin(); i != shards.end(); i++ ) {
-                servers.insert( ServerAndQuery( i->getConnString() , BSONObj() ) );
-            }
-
-            if ( logLevel > 4 ) {
-                StringBuilder ss;
-                ss << " shard query servers: " << servers.size() << '\n';
-                for ( set<ServerAndQuery>::iterator i = servers.begin(); i!=servers.end(); i++ ) {
-                    const ServerAndQuery& s = *i;
-                    ss << "       " << s.toString() << '\n';
-                }
-                log() << ss.str() << endl;
-            }
-
-            ClusteredCursor * cursor = 0;
-
-            BSONObj sort = query.getSort();
-            cursor = new ParallelSortClusteredCursor( servers , q , sort );
-
+            ClusteredCursor * cursor = new ParallelSortClusteredCursor( q, CommandInfo(), r.getChunkManager() );
             assert( cursor );
 
             try {
@@ -78,6 +51,7 @@ namespace mongo {
                 LOG(5) << "   cursor type: " << cursor->type() << endl;
                 shardedCursorTypes.hit( cursor->type() );
 
+                Query query( q.query );
                 if ( query.isExplain() ) {
                     BSONObj explain = cursor->explain();
                     replyToQuery( 0 , r.p() , r.m() , explain );

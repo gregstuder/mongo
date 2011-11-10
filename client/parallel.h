@@ -19,6 +19,8 @@
    tools for working in parallel/sharded/clustered environment
  */
 
+#pragma once
+
 #include "../pch.h"
 #include "dbclient.h"
 #include "redef_macros.h"
@@ -221,6 +223,20 @@ namespace mongo {
     };
 
 
+
+    class CommandInfo {
+    public:
+        string versionedNS;
+        BSONObj cmdFilter;
+
+        bool isEmpty(){
+            return versionedNS.size() == 0;
+        }
+    };
+
+    class ChunkManager;
+    typedef shared_ptr<const ChunkManager> ChunkManagerPtr;
+
     /**
      * runs a query in parellel across N servers
      * sots
@@ -230,6 +246,7 @@ namespace mongo {
         ParallelSortClusteredCursor( const set<ServerAndQuery>& servers , QueryMessage& q , const BSONObj& sortKey );
         ParallelSortClusteredCursor( const set<ServerAndQuery>& servers , const string& ns ,
                                      const Query& q , int options=0, const BSONObj& fields=BSONObj() );
+        ParallelSortClusteredCursor( const QueryMessage& qMess, const CommandInfo& cInfo, ChunkManagerPtr info );
         virtual ~ParallelSortClusteredCursor();
         virtual bool more();
         virtual BSONObj next();
@@ -239,6 +256,9 @@ namespace mongo {
         void _init();
 
         virtual void _explain( map< string,list<BSONObj> >& out );
+
+        ScopedQueryMessage _qMess;
+        CommandInfo _cInfo;
 
         int _numServers;
         set<ServerAndQuery> _servers;
