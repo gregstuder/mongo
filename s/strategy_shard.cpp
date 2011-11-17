@@ -42,7 +42,7 @@ namespace mongo {
             if ( q.ntoreturn == 1 && strstr(q.ns, ".$cmd") )
                 throw UserException( 8010 , "something is wrong, shouldn't see a command here" );
 
-            ClusteredCursor * cursor = new ParallelSortClusteredCursor( q, CommandInfo(), r.getChunkManager() );
+            ClusteredCursor * cursor = new ParallelSortClusteredCursor( q, CommandInfo() );
             assert( cursor );
 
             try {

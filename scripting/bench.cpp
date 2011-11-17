@@ -98,6 +98,7 @@ namespace mongo {
         BSONArrayBuilder trapped;
     };
 
+    /*
     static bool _hasSpecial( const BSONObj& obj ) {
         BSONObjIterator i( obj );
         while ( i.more() ) {
@@ -134,7 +135,59 @@ namespace mongo {
         }
         
     } 
+    */
+
+    static void fixField( BSONElement e, const char* appendAs, BSONObjBuilder& b ){
+        if ( str::equals( "#RAND_INT" , e.fieldName() ) ) {
+            BSONObjIterator i( e.Obj() );
+            int min = i.next().numberInt();
+            int max = i.next().numberInt();
+
+            int x = min + ( rand() % ( max - min ) );
+            b.append( appendAs , x );
+        }
+        // TODO:  #RUN_SCRIPT
+        else {
+            uasserted( 15924 , str::stream() << "invalid bench dynamic piece: " << e );
+        }
+    }
+
+    static void fixObject( BSONObj obj, const char* appendAs, BSONObjBuilder& b ) {
+
+        const char* fieldName = "";
+        BSONElement field = obj.firstElement();
+        if( ! field.eoo() ) fieldName = obj.firstElement().fieldName();
+
+        if( fieldName[0] == '#' ){
+
+            BSONObjBuilder bb;
+            if ( field.type() != Object ) bb.append( field );
+            else fixObject( field.Obj(), fieldName, bb );
+
+            fixField( bb.obj().firstElement(), appendAs, b );
+        }
+        else{
+            BSONObjBuilder bb;
+            BSONObjIterator i( obj );
+            while ( i.more() ) {
+                BSONElement e = i.next();
+                if ( e.type() != Object ) bb.append( e );
+                else fixObject( e.Obj(), e.fieldName(), bb );
+            }
+
+            b.append( appendAs, bb.obj() );
+        }
+    }
     
+    static BSONObj fixQuery( BSONObj obj ){
+        BSONObjBuilder b;
+        fixObject( obj, "", b );
+        obj = b.obj();
+        assert( obj.firstElement().type() == Object );
+        return obj.firstElement().Obj().getOwned();
+    }
+
+    /*
     // TODO:  Make recursively fixing
     static void fixQuery( BSONObjBuilder& b  , const BSONObj& obj ) {
         BSONObjIterator i( obj );
@@ -155,7 +208,8 @@ namespace mongo {
             _fixField( b , e );
         }
     }
-
+    */
+    /*
     static BSONObj fixQuery( const BSONObj& obj ) {
         if ( ! _hasSpecial( obj ) ) 
             return obj;
@@ -164,7 +218,7 @@ namespace mongo {
         fixQuery( b , obj );
         return b.obj();
     }
-
+    */
 
     static void _benchThread( BenchRunConfig * config, ScopedDbConnection& conn ){
 
@@ -226,7 +280,7 @@ namespace mongo {
 
                         BSONObj result;
                         // TODO
-                        /* bool ok = */ conn->runCommand( ns , /* fixQuery( */ e["command"].Obj() /* ) */, result, e["options"].numberInt() );
+                        /* bool ok = */ conn->runCommand( ns , fixQuery( e["command"].Obj() ), result, e["options"].numberInt() );
 
                         if( check ){
                             int err = scope->invoke( scopeFunc , 0 , &result,  1000 * 60 , false );

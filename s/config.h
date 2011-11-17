@@ -57,6 +57,8 @@ namespace mongo {
     class DBConfig;
     typedef boost::shared_ptr<DBConfig> DBConfigPtr;
 
+    typedef shared_ptr<Shard> ShardPtr;
+
     extern DBConfigPtr configServerPtr;
     extern ConfigServer& configServer;
 
@@ -145,11 +147,12 @@ namespace mongo {
         ChunkManagerPtr getChunkManager( const string& ns , bool reload = false, bool forceReload = false );
         ChunkManagerPtr getChunkManagerIfExists( const string& ns , bool reload = false, bool forceReload = false );
 
+        const Shard& getShard( const string& ns );
         /**
          * @return the correct for shard for the ns
          * if the namespace is sharded, will return NULL
          */
-        const Shard& getShard( const string& ns );
+        ShardPtr getShardIfExists( const string& ns );
 
         const Shard& getPrimary() const {
             uassert( 8041 , (string)"no primary shard configured for db: " + _name , _primary.ok() );

@@ -265,6 +265,10 @@ namespace mongo {
 
         bool isEmpty(){ return ns == NULL; }
 
+        string toString() const {
+            return str::stream() << "QMesg " << BSON( "ns" << ns << "n2skip" << ntoskip << "n2return" << ntoreturn << "options" << queryOptions
+                                                           << "query" << query << "fields" << fields );
+        }
      };
 
      class ScopedQueryMessage : public QueryMessage {
@@ -298,6 +302,10 @@ namespace mongo {
 
          ScopedQueryMessage() : QueryMessage() {}
 
+         const BSONObj& queryMsg(){
+             return query;
+         }
+
          BSONObj filter(){
              return queryObj.getFilter();
          }
@@ -310,7 +318,7 @@ namespace mongo {
              return queryObj.getSort();
          }
 
-         BSONObj include(){ return fields; }
+         const BSONObj& include(){ return fields; }
 
          string nspace(){ return nsData; }
 
