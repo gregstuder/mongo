@@ -591,9 +591,13 @@ namespace mongo {
 
         // Try to get either the chunk manager or the primary shard
         int cmRetries = 0;
-        while( ! ( manager = config->getChunkManagerIfExists( ns ) ) &&
+        // We need to test config->isSharded() to avoid throwing a stupid exception in most cases
+        // b/c that's how getChunkManager works
+        // This loop basically retries getting either the chunk manager or primary, one or the other *should* exist
+        // eventually?  TODO: Verify that we need / don't need the loop b/c we are / are not protected by const fields or mutexes
+        while( ! ( config->isSharded( ns ) && ( manager = config->getChunkManagerIfExists( ns ) ).get() ) &&
                ! ( primary = config->getShardIfExists( ns ) ) &&
-               cmRetries++ < 5 );
+               cmRetries++ < 5 ) sleepmillis( 100 ); // TODO: Do we need to loop here?
 
         uassert( 15919, "too many retries for chunk manager or primary", cmRetries < 5 );
         assert( manager || primary );
@@ -940,6 +944,37 @@ namespace mongo {
 
         _numServers = _cursorMap.size();
 
+    }
+
+    bool ParallelSortClusteredCursor::isSharded() {
+        // LEGACY is always sharded
+        if( _qMess.nspace() == "" ) return true;
+
+        if( _cursorMap.size() > 1 ) return true;
+
+        if( _cursorMap.begin()->second.pcState->manager ) return true;
+        return false;
+    }
+
+    ShardPtr ParallelSortClusteredCursor::getPrimary() {
+        if( isSharded() ) return ShardPtr();
+        return _cursorMap.begin()->second.pcState->primary;
+    }
+
+    ChunkManagerPtr ParallelSortClusteredCursor::getChunkManager( const Shard& shard ) {
+        if( ! isSharded() ) return ChunkManagerPtr();
+
+        map<Shard,PCMData>::iterator i = _cursorMap.find( shard );
+
+        if( i == _cursorMap.end() ) return ChunkManagerPtr();
+        else return i->second.pcState->manager;
+    }
+
+    DBClientCursorPtr ParallelSortClusteredCursor::getShardCursor( const Shard& shard ) {
+        map<Shard,PCMData>::iterator i = _cursorMap.find( shard );
+
+        if( i == _cursorMap.end() ) return DBClientCursorPtr();
+        else return i->second.pcState->cursor;
     }
 
     void ParallelSortClusteredCursor::_init(){

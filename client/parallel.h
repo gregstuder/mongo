@@ -318,6 +318,11 @@ namespace mongo {
         void startInit();
         void finishInit();
 
+        bool isSharded();
+        ShardPtr getPrimary();
+        ChunkManagerPtr getChunkManager( const Shard& shard );
+        DBClientCursorPtr getShardCursor( const Shard& shard );
+
         BSONObj toBSON() const;
         string toString() const;
 
