@@ -482,7 +482,7 @@ namespace mongo {
         BSONObj stateObj =
                 BSON( "conn" << ( conn ? ( conn->ok() ? conn->conn().toString() : "(done)" ) : "" ) <<
                       "vinfo" << ( manager ? ( str::stream() << manager->getns() << " @ " << manager->getVersion().toString() ) :
-                                            primary->toString() ) );
+                                               primary->toString() ) );
 
         // Append cursor data if exists
         BSONObjBuilder stateB;
@@ -515,15 +515,15 @@ namespace mongo {
             for( map< Shard, PCMData >::const_iterator i = _cursorMap.begin(), end = _cursorMap.end(); i != end; ++i ){
                 bb.append( i->first.toString(), i->second.toBSON() );
             }
-            b.append( "cursors", b.obj() );
+            b.append( "cursors", bb.obj().getOwned() );
         }
 
         {
             BSONObjBuilder bb;
-            for( map< Shard, PCMData >::const_iterator i = _cursorMap.begin(), end = _cursorMap.end(); i != end; ++i ){
-                bb.append( i->first.toString(), i->second.toBSON() );
+            for( map< string, int >::const_iterator i = _staleNSMap.begin(), end = _staleNSMap.end(); i != end; ++i ){
+                bb.append( i->first, i->second );
             }
-            b.append( "staleTries", bb.obj() );
+            b.append( "staleTries", bb.obj().getOwned() );
         }
 
         return b.obj().getOwned();
