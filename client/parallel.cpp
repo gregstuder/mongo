@@ -464,7 +464,7 @@ namespace mongo {
 
         initialized = false;
         finished = false;
-
+        completed = false;
     }
 
 
@@ -698,11 +698,25 @@ namespace mongo {
                                                                  _qMess.numtoreturn() == 0 ? 0 : _qMess.numtoreturn() + _qMess.numtoskip() ) ); // batchSize
                 }
 
-                // Need to keep track if this is a second or third try for replica sets
-                state->cursor->initLazy( mdata.retryNext );
-                mdata.initialized = true;
+                bool lazyInit = state->conn->get()->lazySupported();
+                if( lazyInit ){
 
-                log( pc ) << "initialized on shard " << shard << ", current connection state is " << mdata.toBSON() << endl;
+                    // Need to keep track if this is a second or third try for replica sets
+                    state->cursor->initLazy( mdata.retryNext );
+                    mdata.retryNext = false;
+                    mdata.initialized = true;
+                }
+                else{
+
+                    // Without full initialization, throw an exception
+                    uassert( 15925, str::stream() << "could not fully initialize cursor on shard " << shard.toString() << ", current connection state is " << mdata.toBSON().toString(), state->cursor->init() );
+                    mdata.retryNext = false;
+                    mdata.initialized = true;
+                    mdata.finished = true;
+                }
+
+
+                log( pc ) << "initialized " << ( lazyInit ? "(lazily)" : "(full)" ) << " on shard " << shard << ", current connection state is " << mdata.toBSON() << endl;
 
             }
             catch( SendStaleConfigException& e ){
@@ -737,6 +751,10 @@ namespace mongo {
             }
             catch( DBException& e ){
                 warning() << "db exception when initializing on " << shard << ", current connection state is " << mdata.toBSON() << causedBy( e ) << endl;
+                if( returnPartial && e.getCode() == 15925 /* From above! */ ){
+                    mdata.cleanup();
+                    continue;
+                }
                 throw e;
             }
             catch( std::exception& e){
@@ -750,8 +768,6 @@ namespace mongo {
         }
 
         // Sanity check final init'ed connections
-        size_t totalInited = 0;
-        int totalUnfinished = 0;
         for( map< Shard, PCMData >::iterator i = _cursorMap.begin(), end = _cursorMap.end(); i != end; ++i ){
 
             const Shard& shard = i->first;
@@ -765,12 +781,12 @@ namespace mongo {
             assert( mdata.pcState->conn->ok() );
             assert( mdata.pcState->cursor );
             assert( mdata.pcState->primary || mdata.pcState->manager );
+            assert( ! mdata.retryNext );
 
-            if( ! mdata.finished ) totalUnfinished++;
-            totalInited++;
+            if( mdata.completed ) assert( mdata.finished );
+            if( mdata.finished ) assert( mdata.initialized );
+            if( ! returnPartial ) assert( mdata.initialized );
         }
-        assert( totalInited == todo.size() );
-        assert( totalUnfinished > 0 );
 
     }
 
@@ -794,8 +810,6 @@ namespace mongo {
 
             // Ignore empty conns for now
             if( ! mdata.pcState ) continue;
-            // Ignore finished conns
-            if( mdata.finished ) continue;
 
             PCStatePtr state = mdata.pcState;
 
@@ -807,29 +821,40 @@ namespace mongo {
                 assert( state->manager || state->primary );
                 assert( ! state->manager || ! state->primary );
 
-                // Mark the cursor as non-retry by default
-                mdata.retryNext = false;
+                // If we weren't init'ing lazily, ignore this
+                if( ! mdata.finished ){
 
-                mdata.finished = true;
-                if( ! state->cursor->initLazyFinish( mdata.retryNext ) ){
-                    if( ! mdata.retryNext ){
-                        uassert( 15921, "error querying server", false );
+                    mdata.finished = true;
+
+                    // Mark the cursor as non-retry by default
+                    mdata.retryNext = false;
+
+                    if( ! state->cursor->initLazyFinish( mdata.retryNext ) ){
+                        if( ! mdata.retryNext ){
+                            uassert( 15921, "error querying server", false );
+                        }
+                        else{
+                            retry = true;
+                            continue;
+                        }
                     }
-                    else{
-                        retry = true;
-                        continue;
-                    }
+
+                    mdata.completed = false;
                 }
 
-                // Make sure we didn't get an error we should rethrow
-                // TODO : Rename/refactor this to something better
-                _checkCursor( state->cursor.get() );
+                if( ! mdata.completed ){
 
-                // Finalize state
-                state->cursor->attach( state->conn.get() ); // Closes connection for us
+                    mdata.completed = true;
 
-                log( pc ) << "finished on shard " << shard << ", current connection state is " << mdata.toBSON() << endl;
+                    // Make sure we didn't get an error we should rethrow
+                    // TODO : Rename/refactor this to something better
+                    _checkCursor( state->cursor.get() );
 
+                    // Finalize state
+                    state->cursor->attach( state->conn.get() ); // Closes connection for us
+
+                    log( pc ) << "finished on shard " << shard << ", current connection state is " << mdata.toBSON() << endl;
+                }
             }
             catch( RecvStaleConfigException& e ){
                 retry = true;
@@ -919,6 +944,7 @@ namespace mongo {
             // Make sure all state is in shards
             assert( mdata.initialized = true );
             assert( mdata.finished = true );
+            assert( mdata.completed = true );
             assert( ! mdata.pcState->conn->ok() );
             assert( mdata.pcState->cursor );
             assert( mdata.pcState->primary || mdata.pcState->manager );
