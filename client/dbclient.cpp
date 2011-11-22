@@ -1064,6 +1064,11 @@ namespace mongo {
         return true;
     }
 
+    bool nsIsCmd( const string &ns ) {
+        string::size_type pos = ns.find( ".$cmd" );
+        if ( pos == string::npos ) return false;
+        return pos > 0 && pos == ns.size() - ((string)".$cmd").size();
+    }
 
     /** @return the database name portion of an ns string */
     string nsGetDB( const string &ns ) {

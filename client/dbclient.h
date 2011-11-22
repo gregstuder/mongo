@@ -344,6 +344,10 @@ namespace mongo {
     /** @return the collection name portion of an ns string */
     string nsGetCollection( const string &ns );
 
+    // Useful utilities for namespaces
+    /** @return whether a namespace is a command */
+    bool nsIsCmd( const string &ns );
+
     /**
        interface that handles communication with the db
      */
