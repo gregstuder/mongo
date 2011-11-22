@@ -372,17 +372,32 @@ namespace mongo {
         : ClusteredCursor( *((QueryMessage*)&qMess) ),
           _qMess( qMess ), _cInfo( cInfo ), _totalTries( 0 )
     {
-        _needToSkip = _qMess.numtoskip();
-        _cursors = 0;
-        _sortKey = _qMess.sort();
-        _fields = _qMess.include();
         _finishCons();
-        _qMess.fields = _fields;
+    }
+
+    ParallelSortClusteredCursor::ParallelSortClusteredCursor( const set<Shard>& qShards, const QueryMessage& qMess )
+        : ClusteredCursor( *((QueryMessage*)&qMess) ),
+          _qMess( qMess ), _totalTries( 0 )
+    {
+        for( set<Shard>::const_iterator i = qShards.begin(), end = qShards.end(); i != end; ++i )
+            _qShards.insert( *i );
+
+        _finishCons();
     }
 
     void ParallelSortClusteredCursor::_finishCons() {
         _numServers = _servers.size();
         _cursors = 0;
+
+        if( _qMess.nspace() != "" ){
+
+            _needToSkip = _qMess.numtoskip();
+            _cursors = 0;
+            _sortKey = _qMess.sort();
+            _fields = _qMess.include();
+
+            if( ! isVersioned() ) assert( _cInfo.isEmpty() );
+        }
 
         if ( ! _sortKey.isEmpty() && ! _fields.isEmpty() ) {
             // we need to make sure the sort key is in the projection
@@ -424,6 +439,10 @@ namespace mongo {
             }
 
             _fields = b.obj();
+        }
+
+        if( _qMess.nspace() != "" ){
+            _qMess.fields = _fields;
         }
     }
 
@@ -578,49 +597,63 @@ namespace mongo {
     void ParallelSortClusteredCursor::startInit() {
 
         bool returnPartial = ( _qMess.options() & QueryOption_PartialResults );
+        bool specialVersion = _cInfo.versionedNS.size() > 0;
+        bool specialFilter = ! _cInfo.cmdFilter.isEmpty();
+        string ns = specialVersion ? _cInfo.versionedNS : _qMess.nspace();
 
         ChunkManagerPtr manager;
         ShardPtr primary;
 
-        string ns = _isCommand() ? _cInfo.versionedNS : _qMess.nspace();
+        log( pc ) << "creating pcursor over " << _qMess << " and " << _cInfo << endl;
 
-        log( pc ) << "creating " << ( _isCommand() ? "(command) " : "" ) << "pcursor over " << _qMess << " and " << _cInfo << endl;
-
-        DBConfigPtr config = grid.getDBConfig( nsGetDB( ns ) ); // Gets or loads the config
-        uassert( 15923, "database not found for parallel cursor request", config );
-
-        // Try to get either the chunk manager or the primary shard
-        int cmRetries = 0;
-        // We need to test config->isSharded() to avoid throwing a stupid exception in most cases
-        // b/c that's how getChunkManager works
-        // This loop basically retries getting either the chunk manager or primary, one or the other *should* exist
-        // eventually?  TODO: Verify that we need / don't need the loop b/c we are / are not protected by const fields or mutexes
-        while( ! ( config->isSharded( ns ) && ( manager = config->getChunkManagerIfExists( ns ) ).get() ) &&
-               ! ( primary = config->getShardIfExists( ns ) ) &&
-               cmRetries++ < 5 ) sleepmillis( 100 ); // TODO: Do we need to loop here?
-
-        uassert( 15919, "too many retries for chunk manager or primary", cmRetries < 5 );
-        assert( manager || primary );
-        assert( ! manager || ! primary );
-
+        set<Shard> todoStorage;
+        set<Shard>& todo = todoStorage;
         string vinfo;
-        if( manager ) vinfo = ( str::stream() << "[" << manager->getns() << " @ " << manager->getVersion().toString() << "]" );
-        else vinfo = (str::stream() << "[unsharded @" << primary->toString() << "]" );
 
-        set<Shard> todo;
-        if( manager ) manager->getShardsForQuery( todo, _isCommand() ? _cInfo.cmdFilter : _qMess.filter() );
-        else if( primary ) todo.insert( *primary );
+        if( isVersioned() ){
+
+            DBConfigPtr config = grid.getDBConfig( nsGetDB( ns ) ); // Gets or loads the config
+            uassert( 15923, "database not found for parallel cursor request", config );
+
+            // Try to get either the chunk manager or the primary shard
+            int cmRetries = 0;
+            // We need to test config->isSharded() to avoid throwing a stupid exception in most cases
+            // b/c that's how getChunkManager works
+            // This loop basically retries getting either the chunk manager or primary, one or the other *should* exist
+            // eventually?  TODO: Verify that we need / don't need the loop b/c we are / are not protected by const fields or mutexes
+            while( ! ( config->isSharded( ns ) && ( manager = config->getChunkManagerIfExists( ns ) ).get() ) &&
+                   ! ( primary = config->getShardIfExists( ns ) ) &&
+                   cmRetries++ < 5 ) sleepmillis( 100 ); // TODO: Do we need to loop here?
+
+            uassert( 15919, "too many retries for chunk manager or primary", cmRetries < 5 );
+            assert( manager || primary );
+            assert( ! manager || ! primary );
+
+            if( manager ) vinfo = ( str::stream() << "[" << manager->getns() << " @ " << manager->getVersion().toString() << "]" );
+            else vinfo = (str::stream() << "[unsharded @" << primary->toString() << "]" );
+
+            if( manager ) manager->getShardsForQuery( todo, specialFilter ? _cInfo.cmdFilter : _qMess.filter() );
+            else if( primary ) todo.insert( *primary );
+
+
+            // Close all cursors on extra shards first, as these will be invalid
+            for( map< Shard, PCMData >::iterator i = _cursorMap.begin(), end = _cursorMap.end(); i != end; ++i ){
+
+                log( pc ) << "closing cursor on shard " << i->first << " as the connection is no longer required by " << vinfo << endl;
+
+                // Force total cleanup of these connections
+                if( todo.find( i->first ) == todo.end() ) i->second.cleanup();
+            }
+        }
+        else{
+
+            // Don't use version to get shards here
+            todo = _qShards;
+            vinfo = str::stream() << "[" << _qShards.size() << " shards specified]";
+
+        }
 
         assert( todo.size() );
-
-        // Close all cursors on extra shards first, as these will be invalid
-        for( map< Shard, PCMData >::iterator i = _cursorMap.begin(), end = _cursorMap.end(); i != end; ++i ){
-
-            log( pc ) << "closing cursor on shard " << i->first << " as the connection is no longer required by " << vinfo << endl;
-
-            // Force total cleanup of these connections
-            if( todo.find( i->first ) == todo.end() ) i->second.cleanup();
-        }
 
         log( pc ) << "initializing over " << todo.size() << " shards required by " << vinfo << endl;
 
@@ -641,17 +674,26 @@ namespace mongo {
                 if( mdata.initialized ){
 
                     assert( mdata.pcState );
+
                     PCStatePtr state = mdata.pcState;
 
-                    if( primary && ! state->primary )
-                        warning() << "Collection becoming unsharded detected" << endl;
-                    if( manager && ! state->manager )
-                        warning() << "Collection becoming sharded detected" << endl;
-                    if( primary && state->primary && primary != state->primary )
-                        warning() << "Weird shift of primary detected" << endl;
+                    bool compatiblePrimary = true;
+                    bool compatibleManager = true;
 
-                    bool compatiblePrimary = primary && state->primary && primary == state->primary;
-                    bool compatibleManager = manager && state->manager && manager->compatibleWith( state->manager, shard );
+                    // Only check for compatibility if we aren't forcing the shard choices
+                    if( isVersioned() ){
+
+                        if( primary && ! state->primary )
+                            warning() << "Collection becoming unsharded detected" << endl;
+                        if( manager && ! state->manager )
+                            warning() << "Collection becoming sharded detected" << endl;
+                        if( primary && state->primary && primary != state->primary )
+                            warning() << "Weird shift of primary detected" << endl;
+
+                        compatiblePrimary = primary && state->primary && primary == state->primary;
+                        compatibleManager = manager && state->manager && manager->compatibleWith( state->manager, shard );
+
+                    }
 
                     if( compatiblePrimary || compatibleManager ){
                         // If we're compatible, don't need to retry unless forced
@@ -665,7 +707,7 @@ namespace mongo {
                     }
                 }
                 else {
-                    // Cleanup connection
+                    // Cleanup connection if we're not yet initialized
                     mdata.cleanup( false );
                 }
 
@@ -674,9 +716,9 @@ namespace mongo {
 
                 // Setup manager / primary
                 if( manager ) state->manager = manager;
-                else state->primary = primary;
+                else if( primary ) state->primary = primary;
 
-                assert( ! primary || shard == *primary );
+                assert( ! primary || shard == *primary || ! isVersioned() );
 
                 // Setup conn
                 if( ! state->conn ) state->conn.reset( new ShardConnection( shard, ns, manager ) );
@@ -690,12 +732,12 @@ namespace mongo {
                 // Setup cursor
                 if( ! state->cursor ){
                     state->cursor.reset( new DBClientCursor( state->conn->get(), _qMess.nspace(), _qMess.queryMsg(),
-                                                                 0 , // nToReturn
-                                                                 0 , // nToSkip
-                                                                 // Does this need to be a ptr?
-                                                                 _qMess.include().isEmpty() ? 0 : &_qMess.fields, // fieldsToReturn
-                                                                 _qMess.options(), // options
-                                                                 _qMess.numtoreturn() == 0 ? 0 : _qMess.numtoreturn() + _qMess.numtoskip() ) ); // batchSize
+                                                             isCommand() ? 1 : 0, // nToReturn (0 if query indicates multi)
+                                                             0, // nToSkip
+                                                             // Does this need to be a ptr?
+                                                             _qMess.include().isEmpty() ? 0 : &_qMess.fields, // fieldsToReturn
+                                                             _qMess.options(), // options
+                                                             _qMess.numtoreturn() == 0 ? 0 : _qMess.numtoreturn() + _qMess.numtoskip() ) ); // batchSize
                 }
 
                 bool lazyInit = state->conn->get()->lazySupported();
@@ -716,7 +758,7 @@ namespace mongo {
                 }
 
 
-                log( pc ) << "initialized " << ( lazyInit ? "(lazily)" : "(full)" ) << " on shard " << shard << ", current connection state is " << mdata.toBSON() << endl;
+                log( pc ) << "initialized " << ( isCommand() ? "command " : "query " ) << ( lazyInit ? "(lazily) " : "(full) " ) << "on shard " << shard << ", current connection state is " << mdata.toBSON() << endl;
 
             }
             catch( SendStaleConfigException& e ){
@@ -780,7 +822,8 @@ namespace mongo {
             assert( mdata.initialized = true );
             assert( mdata.pcState->conn->ok() );
             assert( mdata.pcState->cursor );
-            assert( mdata.pcState->primary || mdata.pcState->manager );
+            if( isVersioned() ) assert( mdata.pcState->primary || mdata.pcState->manager );
+            else assert( ! mdata.pcState->primary || ! mdata.pcState->manager );
             assert( ! mdata.retryNext );
 
             if( mdata.completed ) assert( mdata.finished );
@@ -794,9 +837,10 @@ namespace mongo {
     void ParallelSortClusteredCursor::finishInit(){
 
         bool returnPartial = ( _qMess.options() & QueryOption_PartialResults );
+        bool specialVersion = _cInfo.versionedNS.size() > 0;
+        string ns = specialVersion ? _cInfo.versionedNS : _qMess.nspace();
 
         bool retry = false;
-        string ns = _isCommand() ? _cInfo.versionedNS : _qMess.nspace();
         set< string > staleNSes;
 
         log( pc ) << "finishing over " << _cursorMap.size() << " shards" << endl;
@@ -818,8 +862,12 @@ namespace mongo {
                 // Sanity checks
                 assert( state->conn && state->conn->ok() );
                 assert( state->cursor );
-                assert( state->manager || state->primary );
-                assert( ! state->manager || ! state->primary );
+                if( isVersioned() ){
+                    assert( state->manager || state->primary );
+                    assert( ! state->manager || ! state->primary );
+                }
+                else assert( ! state->manager && ! state->primary );
+
 
                 // If we weren't init'ing lazily, ignore this
                 if( ! mdata.finished ){
@@ -947,7 +995,8 @@ namespace mongo {
             assert( mdata.completed = true );
             assert( ! mdata.pcState->conn->ok() );
             assert( mdata.pcState->cursor );
-            assert( mdata.pcState->primary || mdata.pcState->manager );
+            if( isVersioned() ) assert( mdata.pcState->primary || mdata.pcState->manager );
+            else assert( ! mdata.pcState->primary && ! mdata.pcState->manager );
         }
 
         // TODO : More cleanup of metadata?
@@ -973,8 +1022,10 @@ namespace mongo {
     }
 
     bool ParallelSortClusteredCursor::isSharded() {
-        // LEGACY is always sharded
-        if( _qMess.nspace() == "" ) return true;
+        // LEGACY is always unsharded
+        if( _qMess.nspace() == "" ) return false;
+
+        if( ! isVersioned() ) return false;
 
         if( _cursorMap.size() > 1 ) return true;
 
@@ -983,8 +1034,14 @@ namespace mongo {
     }
 
     ShardPtr ParallelSortClusteredCursor::getPrimary() {
-        if( isSharded() ) return ShardPtr();
+        if( isSharded() || ! isVersioned() ) return ShardPtr();
         return _cursorMap.begin()->second.pcState->primary;
+    }
+
+    void ParallelSortClusteredCursor::getQueryShards( set<Shard>& shards ) {
+        for( map< Shard, PCMData >::iterator i = _cursorMap.begin(), end = _cursorMap.end(); i != end; ++i ){
+            shards.insert( i->first );
+        }
     }
 
     ChunkManagerPtr ParallelSortClusteredCursor::getChunkManager( const Shard& shard ) {

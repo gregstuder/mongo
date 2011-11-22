@@ -232,6 +232,9 @@ namespace mongo {
         string versionedNS;
         BSONObj cmdFilter;
 
+        CommandInfo() {}
+        CommandInfo( const string& vns, const BSONObj& filter ) : versionedNS( vns ), cmdFilter( filter ) {}
+
         bool isEmpty(){
             return versionedNS == "";
         }
@@ -309,7 +312,8 @@ namespace mongo {
         ParallelSortClusteredCursor( const set<ServerAndQuery>& servers , QueryMessage& q , const BSONObj& sortKey );
         ParallelSortClusteredCursor( const set<ServerAndQuery>& servers , const string& ns ,
                                      const Query& q , int options=0, const BSONObj& fields=BSONObj() );
-        ParallelSortClusteredCursor( const QueryMessage& qMess, const CommandInfo& cInfo );
+        ParallelSortClusteredCursor( const QueryMessage& qMess, const CommandInfo& cInfo = CommandInfo() );
+        ParallelSortClusteredCursor( const set<Shard>& servers, const QueryMessage& qMess );
         virtual ~ParallelSortClusteredCursor();
         virtual bool more();
         virtual BSONObj next();
@@ -319,8 +323,12 @@ namespace mongo {
         void startInit();
         void finishInit();
 
+        bool isCommand(){ return nsIsCmd( _qMess.nspace() ); }
+        bool isVersioned(){ return _qShards.size() == 0; }
+
         bool isSharded();
         ShardPtr getPrimary();
+        void getQueryShards( set<Shard>& shards );
         ChunkManagerPtr getChunkManager( const Shard& shard );
         DBClientCursorPtr getShardCursor( const Shard& shard );
 
@@ -334,10 +342,10 @@ namespace mongo {
 
         virtual void _explain( map< string,list<BSONObj> >& out );
 
-        bool _isCommand(){ return ! _cInfo.isEmpty(); }
         void _markStaleNS( const string& staleNS, bool& forceReload, bool& fullReload );
         void _handleStaleNS( const string& staleNS, bool forceReload, bool fullReload );
 
+        set<Shard> _qShards;
         ScopedQueryMessage _qMess;
         CommandInfo _cInfo;
         // Count round-trips req'd for namespaces and total

@@ -1007,6 +1007,7 @@ namespace mongo {
             }
 
             bool run(const string& dbName , BSONObj& cmdObj, string& errmsg, BSONObjBuilder& result, int retry ) {
+
                 Timer t;
 
                 string collection = cmdObj.firstElement().valuestrsafe();
@@ -1047,75 +1048,34 @@ namespace mongo {
 
                 BSONObjBuilder timingBuilder;
 
-                ChunkManagerPtr cm = conf->getChunkManager( fullns );
-
-                BSONObj q;
-                if ( cmdObj["query"].type() == Object ) {
-                    q = cmdObj["query"].embeddedObjectUserCheck();
-                }
-
-                set<Shard> shards;
-                cm->getShardsForQuery( shards , q );
-
-
                 BSONObjBuilder finalCmd;
                 finalCmd.append( "mapreduce.shardedfinish" , cmdObj );
                 finalCmd.append( "shardedOutputCollection" , shardedOutputCollection );
-                
-                
-                set<ServerAndQuery> servers;
+
                 BSONObj shardCounts;
                 BSONObj aggCounts;
                 map<string,long long> countsMap;
+                set<ServerAndQuery> servers;
+                set<Shard> shards;
+
                 {
-                    // we need to use our connections to the shard
-                    // so filtering is done correctly for un-owned docs
-                    // so we allocate them in our thread
-                    // and hand off
-                    // Note: why not use pooled connections? This has been reported to create too many connections
-                    vector< shared_ptr<ShardConnection> > shardConns;
-                    list< shared_ptr<Future::CommandResult> > futures;
-                    
-                    for ( set<Shard>::iterator i=shards.begin(), end=shards.end() ; i != end ; i++ ) {
-                        shared_ptr<ShardConnection> temp( new ShardConnection( i->getConnString() , fullns ) );
-                        assert( temp->get() );
-                        futures.push_back( Future::spawnCommand( i->getConnString() , dbName , shardedCommand , 0 , temp->get() ) );
-                        shardConns.push_back( temp );
-                    }
-                    
-                    bool failed = false;
+                    map<Shard,BSONObj> results;
+                    SHARDED->commandOp( dbName, shardedCommand, 0, fullns, BSONObj(), results );
 
                     // now wait for the result of all shards
                     BSONObjBuilder shardResultsB;
                     BSONObjBuilder shardCountsB;
                     BSONObjBuilder aggCountsB;
-                    for ( list< shared_ptr<Future::CommandResult> >::iterator i=futures.begin(); i!=futures.end(); i++ ) {
 
-                        BSONObj mrResult;
-                        string server;
+                    for ( map<Shard,BSONObj>::iterator i=results.begin(); i!=results.end(); i++ ) {
 
-                        try {
-                            shared_ptr<Future::CommandResult> res = *i;
-                            if ( ! res->join() ) {
-                                error() << "sharded m/r failed on shard: " << res->getServer() << " error: " << res->result() << endl;
-                                result.append( "cause" , res->result() );
-                                errmsg = "mongod mr failed: ";
-                                errmsg += res->result().toString();
-                                failed = true;
-                                continue;
-                            }
-                            mrResult = res->result();
-                            server = res->getServer();
-                        }
-                        catch( RecvStaleConfigException& e ){
+                        const BSONObj& mrResult = i->second;
+                        const string& server = i->first.getConnString();
 
-                            // TODO: really should kill all the MR ops we sent if possible...
+                        log() << "Found result: " << mrResult << " and " << server << endl;
 
-                            log() << "restarting m/r due to stale config on a shard" << causedBy( e ) << endl;
-
-                            return run( dbName , cmdObj, errmsg, result, retry + 1 );
-
-                        }
+                        servers.insert( ServerAndQuery( server, BSONObj() ) );
+                        shards.insert( i->first );
 
                         shardResultsB.append( server , mrResult );
                         BSONObj counts = mrResult["counts"].embeddedObjectUserCheck();
@@ -1131,11 +1091,6 @@ namespace mongo {
                         }
                     }
 
-                    for ( unsigned i=0; i<shardConns.size(); i++ )
-                        shardConns[i]->done();
-
-                    if ( failed )
-                        return 0;
 
                     finalCmd.append( "shards" , shardResultsB.obj() );
                     shardCounts = shardCountsB.obj();
@@ -1148,6 +1103,7 @@ namespace mongo {
                     aggCounts = aggCountsB.obj();
                     finalCmd.append( "counts" , aggCounts );
                 }
+
 
                 Timer t2;
                 BSONObj finalResult;
