@@ -830,7 +830,7 @@ namespace mongo {
             // Make sure all state is in shards
             assert( todo.find( shard ) != todo.end() );
             assert( mdata.initialized = true );
-            assert( mdata.pcState->conn->ok() );
+            if( ! mdata.completed ) assert( mdata.pcState->conn->ok() );
             assert( mdata.pcState->cursor );
             if( isVersioned() ) assert( mdata.pcState->primary || mdata.pcState->manager );
             else assert( ! mdata.pcState->primary || ! mdata.pcState->manager );
@@ -870,7 +870,7 @@ namespace mongo {
             try {
 
                 // Sanity checks
-                assert( state->conn && state->conn->ok() );
+                if( ! mdata.completed ) assert( state->conn && state->conn->ok() );
                 assert( state->cursor );
                 if( isVersioned() ){
                     assert( state->manager || state->primary );
