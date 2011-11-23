@@ -448,11 +448,16 @@ namespace mongo {
 
     void ParallelConnectionMetadata::cleanup( bool full ){
 
-        if( full ) retryNext = false;
+        if( full || errored ) retryNext = false;
 
         if( ! retryNext && pcState ){
 
-            if( initialized ){
+            if( errored && pcState->conn ){
+                // Don't return this conn to the pool if it's bad
+                pcState->conn->kill();
+                pcState->conn.reset();
+            }
+            else if( initialized ){
 
                 assert( pcState->cursor );
                 assert( pcState->conn );
@@ -484,6 +489,7 @@ namespace mongo {
         initialized = false;
         finished = false;
         completed = false;
+        errored = false;
     }
 
 
@@ -771,7 +777,7 @@ namespace mongo {
                 _markStaleNS( staleNS, forceReload, fullReload );
 
                 int logLevel = fullReload ? 0 : 1;
-                LOG( logLevel ) << "retrying connections for shard state" << endl;
+                log( pc + logLevel ) << "stale config of ns " << staleNS << " during initialization, will retry" << endl;
 
                 // This is somewhat strange
                 if( staleNS != ns )
@@ -785,26 +791,30 @@ namespace mongo {
             }
             catch( SocketException& e ){
                 warning() << "socket exception when initializing on " << shard << ", current connection state is " << mdata.toBSON() << causedBy( e ) << endl;
+                mdata.errored = true;
                 if( returnPartial ){
                     mdata.cleanup();
                     continue;
                 }
-                throw e;
+                throw;
             }
             catch( DBException& e ){
                 warning() << "db exception when initializing on " << shard << ", current connection state is " << mdata.toBSON() << causedBy( e ) << endl;
+                mdata.errored = true;
                 if( returnPartial && e.getCode() == 15925 /* From above! */ ){
                     mdata.cleanup();
                     continue;
                 }
-                throw e;
+                throw;
             }
             catch( std::exception& e){
                 warning() << "exception when initializing on " << shard << ", current connection state is " << mdata.toBSON() << causedBy( e ) << endl;
-                throw e;
+                mdata.errored = true;
+                throw;
             }
             catch( ... ){
                 warning() << "unknown exception when initializing on " << shard << ", current connection state is " << mdata.toBSON() << endl;
+                mdata.errored = true;
                 throw;
             }
         }
@@ -916,33 +926,37 @@ namespace mongo {
             }
             catch ( MsgAssertionException& e ){
                 warning() << "socket (msg) exception when finishing on " << shard << ", current connection state is " << mdata.toBSON() << causedBy( e ) << endl;
+                mdata.errored = true;
                 if( returnPartial ){
                     mdata.cleanup();
                     continue;
                 }
-                throw e;
+                throw;
             }
             catch( SocketException& e ){
                 warning() << "socket exception when finishing on " << shard << ", current connection state is " << mdata.toBSON() << causedBy( e ) << endl;
+                mdata.errored = true;
                 if( returnPartial ){
                     mdata.cleanup();
                     continue;
                 }
-                throw e;
+                throw;
             }
             catch( DBException& e ){
                 warning() << "db exception when finishing on " << shard << ", current connection state is " << mdata.toBSON() << causedBy( e ) << endl;
-                throw e;
+                mdata.errored = true;
+                throw;
             }
             catch( std::exception& e){
                 warning() << "exception when finishing on " << shard << ", current connection state is " << mdata.toBSON() << causedBy( e ) << endl;
-                throw e;
+                mdata.errored = true;
+                throw;
             }
             catch( ... ){
                 warning() << "unknown exception when finishing on " << shard << ", current connection state is " << mdata.toBSON() << endl;
+                mdata.errored = true;
                 throw;
             }
-
         }
 
         // Retry logic for single refresh of namespaces / retry init'ing connections
@@ -958,7 +972,7 @@ namespace mongo {
                     _markStaleNS( staleNS, forceReload, fullReload );
 
                     int logLevel = fullReload ? 0 : 1;
-                    LOG( logLevel ) << "retrying connections for shard state2" << endl;
+                    log( pc + logLevel ) << "stale config of ns " << staleNS << " on finishing query, will retry" << endl;
 
                     // This is somewhat strange
                     if( staleNS != ns )

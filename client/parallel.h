@@ -293,6 +293,8 @@ namespace mongo {
         bool finished;
         bool completed;
 
+        bool errored;
+
         BSONObj toBSON() const;
 
         string toString() const {
