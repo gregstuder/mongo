@@ -102,7 +102,7 @@ namespace mongo {
             // Initialize the cursor
             cursor.init();
 
-            log() << "Cursor : " << cursor.toString() << endl;
+            // log() << "Cursor : " << cursor.toString() << endl;
 
             set<Shard> shards;
             cursor.getQueryShards( shards );
