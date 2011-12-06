@@ -73,6 +73,10 @@ namespace mongo {
     }
 
     void ShardChunkManager::_fillCollectionKey( const BSONObj& collectionDoc ) {
+        if( ! collectionDoc["instance"].eoo() ){
+            _collInstance = collectionDoc["instance"].OID();
+        }
+
         BSONElement e = collectionDoc["key"];
         uassert( 13542 , str::stream() << "collection doesn't have a key: " << collectionDoc , ! e.eoo() && e.isABSONObj() );
 
@@ -222,6 +226,7 @@ namespace mongo {
 
         auto_ptr<ShardChunkManager> p( new ShardChunkManager );
         p->_key = this->_key;
+        p->_collInstance = this->_collInstance;
 
         if ( _chunksMap.size() == 1 ) {
             // if left with no chunks, just reset version
@@ -275,6 +280,7 @@ namespace mongo {
         auto_ptr<ShardChunkManager> p( new ShardChunkManager );
 
         p->_key = this->_key;
+        p->_collInstance = this->_collInstance;
         p->_chunksMap = this->_chunksMap;
         p->_chunksMap.insert( make_pair( min.getOwned() , max.getOwned() ) );
         p->_version = version;
@@ -307,6 +313,7 @@ namespace mongo {
         auto_ptr<ShardChunkManager> p( new ShardChunkManager );
 
         p->_key = this->_key;
+        p->_collInstance = this->_collInstance;
         p->_chunksMap = this->_chunksMap;
         p->_version = version; // will increment second, third, ... chunks below
 
@@ -325,7 +332,7 @@ namespace mongo {
 
     string ShardChunkManager::toString() const {
         StringBuilder ss;
-        ss << " ShardChunkManager version: " << _version << " key: " << _key;
+        ss << " ShardChunkManager version: " << _version << " key: " << _key << " instance: " << _collInstance;
         bool first = true;
         for ( RangeMap::const_iterator i=_rangesMap.begin(); i!=_rangesMap.end(); ++i ) {
             if ( first ) first = false;

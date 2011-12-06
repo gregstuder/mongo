@@ -123,6 +123,7 @@ namespace mongo {
 
         // accessors
 
+        OID getCollInstance() const { return _collInstance; }
         ShardChunkVersion getVersion() const { return _version; }
         BSONObj getKey() const { return _key.getOwned(); }
         unsigned getNumChunks() const { return _chunksMap.size(); }
@@ -136,6 +137,7 @@ namespace mongo {
         bool _belongsToMe( const BSONObj& key ) const;
 
         
+        OID _collInstance;
         // highest ShardChunkVersion for which this ShardChunkManager's information is accurate
         ShardChunkVersion _version;
 
