@@ -142,6 +142,19 @@ namespace mongo {
         }
     }
 
+    const OID ShardingState::getCollInstance( const string& ns ) const {
+        scoped_lock lk(_mutex);
+
+        ChunkManagersMap::const_iterator it = _chunks.find( ns );
+        if ( it != _chunks.end() ) {
+            ShardChunkManagerPtr p = it->second;
+            return p->getCollInstance();
+        }
+        else {
+            return OID();
+        }
+    }
+
     void ShardingState::donateChunk( const string& ns , const BSONObj& min , const BSONObj& max , ShardChunkVersion version ) {
         scoped_lock lk( _mutex );
 
@@ -181,7 +194,7 @@ namespace mongo {
         _chunks.erase( ns );
     }
 
-    bool ShardingState::trySetVersion( const string& ns , ConfigVersion& version /* IN-OUT */ ) {
+    bool ShardingState::trySetVersion( const string& ns , ConfigVersion& version /* IN-OUT */, OID collInstance ) {
 
         // fast path - requested version is at the same version as this chunk manager
         //
@@ -194,7 +207,8 @@ namespace mongo {
         {
             scoped_lock lk( _mutex );
             ChunkManagersMap::const_iterator it = _chunks.find( ns );
-            if ( it != _chunks.end() && it->second->getVersion() == version )
+            bool newInstance = collInstance.isSet() && it->second->getCollInstance().isSet() && it->second->getCollInstance() != collInstance;
+            if ( it != _chunks.end() && it->second->getVersion() == version && ! newInstance )
                 return true;
         }
 
@@ -223,7 +237,9 @@ namespace mongo {
 
             ShardChunkVersion oldVersion = version;
             version = p->getVersion();
-            return oldVersion == version;
+            OID newCollInstance = p->getCollInstance();
+            bool newInstance = collInstance.isSet() && newCollInstance.isSet() && collInstance != newCollInstance;
+            return oldVersion == version && ! newInstance;
         }
     }
 
@@ -309,8 +325,20 @@ namespace mongo {
         }
     }
 
-    void ShardedConnectionInfo::setVersion( const string& ns , const ConfigVersion& version ) {
+    const OID ShardedConnectionInfo::getCollInstance( const string& ns ) const {
+        CollInstanceMap::const_iterator it = _collInstances.find( ns );
+        if ( it != _collInstances.end() ) {
+            return it->second;
+        }
+        else {
+            return OID();
+        }
+    }
+
+
+    void ShardedConnectionInfo::setVersion( const string& ns , const ConfigVersion& version, const OID& collInstance ) {
         _versions[ns] = version;
+        _collInstances[ns] = collInstance;
     }
 
     void ShardedConnectionInfo::addHook() {
@@ -329,10 +357,18 @@ namespace mongo {
 
     // -----ShardedConnectionInfo END ----
 
-    unsigned long long extractVersion( BSONElement e , string& errmsg ) {
-        if ( e.eoo() ) {
+    unsigned long long extractVersion( BSONElement e , string& errmsg , BSONElement e2, OID& collInstance ) {
+        if ( e.eoo() && e2.eoo() ) {
             errmsg = "no version";
             return 0;
+        }
+
+        if( ! e2.eoo() ){
+            BSONObj vobj = e2.Obj();
+            if( ! e2["version"].eoo() )
+                BSONElement e = e2["version"];
+            if( ! e2["collInstance"].eoo() )
+                collInstance = e2["collInstance"].OID();
         }
 
         if ( e.isNumber() )
@@ -457,6 +493,13 @@ namespace mongo {
             return true;
         }
 
+        BSONObj fullVersionObj( const ConfigVersion version, const OID& collInstance ){
+            BSONObjBuilder b;
+            b.appendTimestamp( "version", version );
+            b.append( "collInstance", collInstance );
+            return b.obj();
+        }
+
         bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
 
             // Steps
@@ -508,18 +551,44 @@ namespace mongo {
                 return false;
             }
 
-            const ConfigVersion version = extractVersion( cmdObj["version"] , errmsg );
+            OID collInstance;
+            const ConfigVersion version = extractVersion( cmdObj["version"] , errmsg, cmdObj["fullVersion"], collInstance );
             if ( errmsg.size() )
                 return false;
             
             // step 3
 
             const ConfigVersion oldVersion = info->getVersion(ns);
+            const OID oldCollInstance = info->getCollInstance(ns);
             const ConfigVersion globalVersion = shardingState.getVersion(ns);
+            const OID globalCollInstance = shardingState.getCollInstance(ns);
 
             result.appendTimestamp( "oldVersion" , oldVersion );
             
+            //log() << "version : " << fullVersionObj( version, collInstance ) << endl;
+            //log() << "old version : " << fullVersionObj( oldVersion, oldCollInstance ) << endl;
+            //log() << "global version : " << fullVersionObj( globalVersion, globalCollInstance ) << endl;
+
+            bool newInstance = collInstance.isSet() && globalCollInstance.isSet() && collInstance != globalCollInstance;
+            // If both sides are tracking coll instances, we can throw SCEs if this changes
+            if( newInstance ){
+                // Use legacy response, so we're sure will be handled right
+                // TODO:  Change in future to be cleaner, verify we need all this
+                errmsg = "shard global version for collection is higher than trying to set to '" + ns + "'";
+                result.append( "ns" , ns );
+                result.appendTimestamp( "version" , version );
+                result.append( "fullVersion", fullVersionObj( version, collInstance ) );
+                result.appendTimestamp( "globalVersion" , globalVersion );
+                result.append( "globalFullVersion", fullVersionObj( globalVersion, globalCollInstance ) );
+                result.appendBool( "reloadConfig" , true );
+                return false;
+            }
+
+            // At this point, either we have no global instance, in which case we can use our instance, or we do,
+            // and it's equal to the instance we gave or we gave no instance (from an old mongos not tracking instance)
+
             if ( globalVersion > 0 && version > 0 ) {
+
                 // this means there is no reset going on an either side
                 // so its safe to make some assumptions
 
@@ -527,11 +596,11 @@ namespace mongo {
                     // mongos and mongod agree!
                     if ( oldVersion != version ) {
                         if ( oldVersion < globalVersion ) {
-                            info->setVersion( ns , version );
+                            info->setVersion( ns , version, collInstance );
                         }
                         else if ( authoritative ) {
                             // this means there was a drop and our version is reset
-                            info->setVersion( ns , version );
+                            info->setVersion( ns , version, collInstance );
                         }
                         else {
                             result.append( "ns" , ns );
@@ -554,12 +623,12 @@ namespace mongo {
             
             if ( oldVersion > 0 && globalVersion == 0 ) {
                 // this had been reset
-                info->setVersion( ns , 0 );
+                info->setVersion( ns , 0, collInstance );
             }
 
             if ( version == 0 && globalVersion == 0 ) {
                 // this connection is cleaning itself
-                info->setVersion( ns , 0 );
+                info->setVersion( ns , 0, collInstance );
                 return true;
             }
 
@@ -576,7 +645,7 @@ namespace mongo {
                 // only setting global version on purpose
                 // need clients to re-find meta-data
                 shardingState.resetVersion( ns );
-                info->setVersion( ns , 0 );
+                info->setVersion( ns , 0, collInstance );
                 return true;
             }
 
@@ -615,7 +684,7 @@ namespace mongo {
                 dbtemprelease unlock;
 
                 ShardChunkVersion currVersion = version;
-                if ( ! shardingState.trySetVersion( ns , currVersion ) ) {
+                if ( ! shardingState.trySetVersion( ns , currVersion, collInstance ) ) {
                     errmsg = str::stream() << "client version differs from config's for collection '" << ns << "'";
                     result.append( "ns" , ns );
                     result.appendTimestamp( "version" , version );
@@ -627,7 +696,7 @@ namespace mongo {
                 log() << "setShardVersion - relocking slow: " << relockTime.millis() << endl;
             }
             
-            info->setVersion( ns , version );
+            info->setVersion( ns , version, collInstance );
             return true;
         }
 
@@ -710,15 +779,21 @@ namespace mongo {
         //   for now, we remove the sharding state of dropped collection
         //   so delayed request may come in. This has to be fixed.
         ConfigVersion clientVersion = info->getVersion(ns);
+        OID clientCollInstance = info->getCollInstance( ns );
         ConfigVersion version;
-        if ( ! shardingState.hasVersion( ns , version ) && clientVersion == 0 ) {
+        bool hasVersion = shardingState.hasVersion( ns , version );
+        OID collInstance = shardingState.getCollInstance( ns );
+
+        if ( ! hasVersion && clientVersion == 0 ) {
             return true;
         }
 
+        // For now, only trigger new instance error if both sides are tracking collection instances
+        bool newInstance = clientCollInstance.isSet() && collInstance.isSet() && clientCollInstance != collInstance;
 
-        if ( version == 0 && clientVersion > 0 ) {
+        if ( newInstance || ( version == 0 && clientVersion > 0 ) ) {
             stringstream ss;
-            ss << "collection was dropped or this shard no longer valid version: " << version << " clientVersion: " << clientVersion;
+            ss << "collection was dropped or this shard no longer valid version: " << version << " clientVersion: " << clientVersion << " collInstance: " << collInstance << " clientCollInstance: " << clientCollInstance;
             errmsg = ss.str();
             return false;
         }

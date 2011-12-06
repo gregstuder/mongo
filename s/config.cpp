@@ -269,7 +269,8 @@ namespace mongo {
         
         bool forced = false;
         if ( temp->getVersion() > ci.getCM()->getVersion() ||
-            (forced = (temp->getVersion() == ci.getCM()->getVersion() && forceReload ) ) ) {
+            (forced = (temp->getVersion() <= ci.getCM()->getVersion() && forceReload ) ) ) {
+            // NOTE: <= is necessary if a collection gets dropped and recreated
 
             if( forced ){
                 warning() << "chunk manager reload forced for collection '" << ns << "', config version is " << temp->getVersion() << endl;

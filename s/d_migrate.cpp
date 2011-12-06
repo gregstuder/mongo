@@ -854,7 +854,7 @@ namespace mongo {
                 // since this could be the first call that enable sharding we also make sure to have the chunk manager up to date
                 shardingState.gotShardName( myOldShard );
                 ShardChunkVersion shardVersion;
-                shardingState.trySetVersion( ns , shardVersion /* will return updated */ );
+                shardingState.trySetVersion( ns , shardVersion /* will return updated */, shardingState.getCollInstance(ns) );
 
                 log() << "moveChunk request accepted at version " << shardVersion << migrateLog;
             }
