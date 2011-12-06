@@ -899,7 +899,7 @@ namespace mongo {
             // we need a special command for dropping on the d side
             // this hack works for the moment
 
-            if ( ! setShardVersion( conn.conn() , _ns , 0 , true , res ) )
+            if ( ! setShardVersion( conn.conn() , _ns , 0 , OID(), true , res ) )
                 throw UserException( 8071 , str::stream() << "cleaning up after drop failed: " << res );
             conn->simpleCommand( "admin", 0, "unsetSharding" );
             conn.done();
@@ -1052,14 +1052,22 @@ namespace mongo {
     // ----- to be removed ---
     extern OID serverID;
 
+    BSONObj fullVersionObj( const ShardChunkVersion version, const OID& collInstance ){
+        BSONObjBuilder b;
+        b.appendTimestamp( "version", version );
+        b.append( "collInstance", collInstance );
+        return b.obj();
+    }
+
     // NOTE (careful when deprecating)
     //   currently the sharding is enabled because of a write or read (as opposed to a split or migrate), the shard learns
     //   its name and through the 'setShardVersion' command call
-    bool setShardVersion( DBClientBase & conn , const string& ns , ShardChunkVersion version , bool authoritative , BSONObj& result ) {
+    bool setShardVersion( DBClientBase & conn , const string& ns , ShardChunkVersion version , OID collInstance, bool authoritative , BSONObj& result ) {
         BSONObjBuilder cmdBuilder;
         cmdBuilder.append( "setShardVersion" , ns.c_str() );
         cmdBuilder.append( "configdb" , configServer.modelServer() );
         cmdBuilder.appendTimestamp( "version" , version.toLong() );
+        cmdBuilder.append( "fullVersion", fullVersionObj( version, collInstance ) );
         cmdBuilder.appendOID( "serverID" , &serverID );
         if ( authoritative )
             cmdBuilder.appendBool( "authoritative" , 1 );

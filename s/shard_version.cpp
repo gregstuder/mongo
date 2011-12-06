@@ -198,8 +198,11 @@ namespace mongo {
 
 
         ShardChunkVersion version = 0;
+        OID collInstance;
         if ( isSharded && manager ) {
             version = manager->getVersion( Shard::make( conn->getServerAddress() ) );
+            // TODO: Potential race condition here, should really get coll instance with manager
+            collInstance = conf->getCollInstance( ns );
         }
 
         if( version == 0 ){
@@ -212,11 +215,11 @@ namespace mongo {
 
         LOG(2) << " have to set shard version for conn: " << conn << " ns:" << ns
                << " my last seq: " << sequenceNumber << "  current: " << officialSequenceNumber
-               << " version: " << version << " manager: " << manager.get()
+               << " version: " << version << "  instance: " << collInstance << " manager: " << manager.get()
                << endl;
 
         BSONObj result;
-        if ( setShardVersion( *conn , ns , version , authoritative , result ) ) {
+        if ( setShardVersion( *conn , ns , version , collInstance, authoritative , result ) ) {
             // success!
             LOG(1) << "      setShardVersion success: " << result << endl;
             connectionShardStatus.setSequence( conn , ns , officialSequenceNumber );
@@ -234,7 +237,16 @@ namespace mongo {
         }
         
         if ( result["reloadConfig"].trueValue() ) {
-            if( result["version"].timestampTime() == 0 ){
+            if( ! result["fullVersion"].eoo() ){
+                BSONObj globalVersion = result["globalFullVersion"].Obj();
+                if( globalVersion["collInstance"].OID() != collInstance || globalVersion["version"].timestampTime() == 0 ){
+                    conf->reload();
+                }
+                else {
+                    conf->getChunkManager( ns, true );
+                }
+            }
+            else if( result["version"].timestampTime() == 0 ){
                 // reload db
                 conf->reload();
             }
