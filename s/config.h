@@ -96,10 +96,11 @@ namespace mongo {
             void save( const string& ns , DBClientBase* conn );
             
             bool unique() const { return _unqiue; }
-            BSONObj key() const { return _key; } 
-
+            BSONObj key() const { return _key; }
+            OID instance() const { return _instance; }
 
         private:
+            OID _instance;
             BSONObj _key;
             bool _unqiue;
             ChunkManagerPtr _cm;
@@ -145,6 +146,8 @@ namespace mongo {
         ChunkManagerPtr getChunkManager( const string& ns , bool reload = false, bool forceReload = false );
         ChunkManagerPtr getChunkManagerIfExists( const string& ns , bool reload = false, bool forceReload = false );
 
+        OID getCollInstance( const string& ns );
+
         /**
          * @return the correct for shard for the ns
          * if the namespace is sharded, will return NULL
@@ -185,6 +188,7 @@ namespace mongo {
         bool _reload();
         void _save( bool db = true, bool coll = true );
 
+        OID _instanceId;
         string _name; // e.g. "alleyinsider"
         Shard _primary; // e.g. localhost , mongo.foo.com:9999
         bool _shardingEnabled;

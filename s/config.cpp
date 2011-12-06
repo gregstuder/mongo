@@ -58,6 +58,12 @@ namespace mongo {
             _unqiue = in["unique"].trueValue();
             shard( in["_id"].String() , _key , _unqiue );
         }
+
+        if( ! in["instance"].eoo() ){
+            _instance = in["instance"].OID();
+        }
+        else _instance = OID();
+
         _dirty = false;
     }
     
@@ -66,6 +72,7 @@ namespace mongo {
         _cm.reset( new ChunkManager( ns , key , unique ) );
         _key = key.key().getOwned();
         _unqiue = unique;
+        _instance = OID::gen();
         _dirty = true;
         _dropped = false;
     }
@@ -75,6 +82,7 @@ namespace mongo {
         _dropped = true;
         _dirty = true;
         _key = BSONObj();
+        _instance = OID();
     }
 
     void DBConfig::CollectionInfo::save( const string& ns , DBClientBase* conn ) {
@@ -84,6 +92,7 @@ namespace mongo {
         val.append( "_id" , ns );
         val.appendDate( "lastmod" , time(0) );
         val.appendBool( "dropped" , _dropped );
+        if( _instance.isSet() ) val.append( "instance", _instance );
         if ( _cm )
             _cm->getInfo( val );
 
@@ -172,6 +181,14 @@ namespace mongo {
         ci.unshard();
         _save( false, true );
         return true;
+    }
+
+    OID DBConfig::getCollInstance( const string& ns ){
+        scoped_lock lk( _lock );
+
+        map<string,CollectionInfo>::iterator found = _collections.find( ns );
+        if( found == _collections.end() ) return OID();
+        return found->second.instance();
     }
 
     ChunkManagerPtr DBConfig::getChunkManagerIfExists( const string& ns, bool shouldReload, bool forceReload ){
@@ -285,6 +302,11 @@ namespace mongo {
 
         _shardingEnabled = from.getBoolField("partitioned");
         _primary.reset( from.getStringField("primary") );
+
+        if( ! from["instance"].eoo() ){
+            _instanceId = from["instance"].OID();
+        }
+        else _instanceId = OID();
 
         // In the 1.5.x series, we used to have collection metadata nested in the database entry. The 1.6.x series
         // had migration code that ported that info to where it belongs now: the 'collections' collection. We now
