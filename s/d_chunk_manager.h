@@ -123,7 +123,11 @@ namespace mongo {
 
         // accessors
 
-        OID getCollInstance() const { return _collInstance; }
+        OID getCollInstance() const {
+            // Unversioned collections don't have an instance we care about
+            if( _version == 0 ) return OID();
+            else return _collInstance;
+        }
         ShardChunkVersion getVersion() const { return _version; }
         BSONObj getKey() const { return _key.getOwned(); }
         unsigned getNumChunks() const { return _chunksMap.size(); }

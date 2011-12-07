@@ -1067,6 +1067,7 @@ namespace mongo {
         cmdBuilder.append( "setShardVersion" , ns.c_str() );
         cmdBuilder.append( "configdb" , configServer.modelServer() );
         cmdBuilder.appendTimestamp( "version" , version.toLong() );
+        if( version == 0 ) collInstance = OID();
         cmdBuilder.append( "fullVersion", fullVersionObj( version, collInstance ) );
         cmdBuilder.appendOID( "serverID" , &serverID );
         if ( authoritative )

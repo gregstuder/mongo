@@ -207,7 +207,7 @@ namespace mongo {
         {
             scoped_lock lk( _mutex );
             ChunkManagersMap::const_iterator it = _chunks.find( ns );
-            bool newInstance = collInstance.isSet() && it->second->getCollInstance().isSet() && it->second->getCollInstance() != collInstance;
+            bool newInstance = it != _chunks.end() && collInstance.isSet() && it->second->getCollInstance().isSet() && it->second->getCollInstance() != collInstance;
             if ( it != _chunks.end() && it->second->getVersion() == version && ! newInstance )
                 return true;
         }
@@ -366,7 +366,7 @@ namespace mongo {
         if( ! e2.eoo() ){
             BSONObj vobj = e2.Obj();
             if( ! e2["version"].eoo() )
-                BSONElement e = e2["version"];
+                e = e2["version"];
             if( ! e2["collInstance"].eoo() )
                 collInstance = e2["collInstance"].OID();
         }
@@ -565,9 +565,9 @@ namespace mongo {
 
             result.appendTimestamp( "oldVersion" , oldVersion );
             
-            //log() << "version : " << fullVersionObj( version, collInstance ) << endl;
-            //log() << "old version : " << fullVersionObj( oldVersion, oldCollInstance ) << endl;
-            //log() << "global version : " << fullVersionObj( globalVersion, globalCollInstance ) << endl;
+            LOG(4) << "version : " << fullVersionObj( version, collInstance ) << endl;
+            LOG(4) << "old version : " << fullVersionObj( oldVersion, oldCollInstance ) << endl;
+            LOG(4) << "global version : " << fullVersionObj( globalVersion, globalCollInstance ) << endl;
 
             bool newInstance = collInstance.isSet() && globalCollInstance.isSet() && collInstance != globalCollInstance;
             // If both sides are tracking coll instances, we can throw SCEs if this changes
