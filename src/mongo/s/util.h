@@ -116,6 +116,75 @@ namespace mongo {
         return s;
     }
 
+    class CollVersion {
+
+    private:
+
+        ShardChunkVersion _version;
+        OID _instance;
+
+    public:
+
+        CollVersion() : _version( 0 ) {}
+
+        CollVersion( int major, int minor, const OID& instance )
+            : _version( major, minor ), _instance( instance ) {
+        }
+
+        CollVersion( ShardChunkVersion version, const OID& instance )
+            : _version( version ), _instance( instance ) {
+        }
+
+        CollVersion( const CollVersion& version )
+            : _version( version._version ), _instance( version._instance ) {
+        }
+
+        CollVersion( const AtomicUInt& version, const OID& instance )
+            : _version( static_cast<unsigned long long>( version.get() ) ), _instance( instance ) {
+        }
+
+        CollVersion( const BSONElement& e ) {
+
+            if( e.type() == Object && ! e.Obj()["version"].eoo() && ! e.Obj()["instance"].eoo() ){
+                _version = ShardChunkVersion( e.Obj()["version"] );
+                _instance = e.Obj()["instance"].OID();
+            }
+            else {
+                _version = ShardChunkVersion();
+                _instance = OID();
+                log() << "CollVersion can't handle element " << e << endl;
+                assert(0);
+            }
+        }
+
+        ShardChunkVersion getVersion() const { return _version; }
+
+        OID getInstance() const { return _instance; }
+
+        BSONObj toBSON() const {
+            BSONObjBuilder b;
+            b.appendTimestamp( "version", _version );
+            b.append( "instance", _instance );
+            return b.obj();
+        }
+
+        string toString() const {
+            return toBSON().toString();
+        }
+
+        CollVersion& operator=(const CollVersion& r){
+            this->_version = r._version;
+            this->_instance = r._instance;
+            return *this;
+        }
+
+        bool operator==(const CollVersion& r) const { return r._version == _version && r._instance == _instance; }
+        bool operator!=(const CollVersion& r) const { return r._version != _version || r._instance != _instance; }
+
+    };
+
+    typedef shared_ptr<CollVersion> CollVersionPtr;
+
     /**
      * your config info for a given shard/chunk is out of date
      */

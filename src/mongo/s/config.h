@@ -88,7 +88,7 @@ namespace mongo {
                 _cm.reset( cm );
             }
 
-            void shard( const string& ns , const ShardKeyPattern& key , bool unique );
+            void shard( const string& ns , const ShardKeyPattern& key , bool unique, OID instance );
             void unshard();
 
             bool isDirty() const { return _dirty; }

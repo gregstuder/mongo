@@ -298,7 +298,7 @@ namespace mongo {
     public:
         typedef map<Shard,ShardChunkVersion> ShardVersionMap;
 
-        ChunkManager( string ns , ShardKeyPattern pattern , bool unique );
+        ChunkManager( string ns , ShardKeyPattern pattern , bool unique, CollVersion version = CollVersion() );
 
         string getns() const { return _ns; }
 
@@ -333,7 +333,7 @@ namespace mongo {
         string toString() const;
 
         ShardChunkVersion getVersion( const Shard& shard ) const;
-        ShardChunkVersion getVersion() const;
+        CollVersion getVersion() const;
 
         /**
          * this is just an increasing number of how many ChunkManagers we have so we know if something has been updated
@@ -343,6 +343,7 @@ namespace mongo {
         void getInfo( BSONObjBuilder& b ) const {
             b.append( "key" , _key.key() );
             b.appendBool( "unique" , _unique );
+            if( _version.getInstance().isSet() ) b.append( "instance", _version.getInstance() );
         }
 
         /**
@@ -373,7 +374,8 @@ namespace mongo {
 
         const ShardVersionMap _shardVersions; // max version per shard
 
-        ShardChunkVersion _version; // max version of any chunk
+        // TODO:  Refactoring load as static would help to make this const too
+        CollVersion _version; // max version of any chunk
 
         mutable mutex _mutex; // only used with _nsLock
         mutable DistributedLock _nsLock;
@@ -425,6 +427,6 @@ namespace mongo {
     */
     inline string Chunk::genID() const { return genID(_manager->getns(), _min); }
 
-    bool setShardVersion( DBClientBase & conn , const string& ns , ShardChunkVersion version , bool authoritative , BSONObj& result );
+    bool setShardVersion( DBClientBase & conn , const string& ns , CollVersion version , bool authoritative , BSONObj& result );
 
 } // namespace mongo

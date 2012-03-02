@@ -189,7 +189,7 @@ namespace mongo {
 
                     LOG(1) << m.toString() << endl;
 
-                    if ( needVersion.isSet() && manager && needVersion <= manager->getVersion() ) {
+                    if ( needVersion.isSet() && manager && needVersion <= manager->getVersion().getVersion() ) {
                         // this means when the write went originally, the version was old
                         // if we're here, it means we've already updated the config, so don't need to do again
                         //db->getChunkManager( ns , true ); // SERVER-1349

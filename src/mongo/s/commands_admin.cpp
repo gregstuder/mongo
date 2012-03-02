@@ -629,7 +629,7 @@ namespace mongo {
                     return false;
                 }
                 cm->_printChunks();
-                result.appendTimestamp( "version" , cm->getVersion().toLong() );
+                result.appendTimestamp( "version" , cm->getVersion().getVersion().toLong() );
 
                 return 1;
             }

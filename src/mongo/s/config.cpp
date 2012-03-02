@@ -57,14 +57,16 @@ namespace mongo {
         if ( in["key"].isABSONObj() ) {
             _key = in["key"].Obj().getOwned();
             _unqiue = in["unique"].trueValue();
-            shard( in["_id"].String() , _key , _unqiue );
+            OID instance;
+            instance = in["instance"].type() == jstOID ? in["instance"].OID() : OID();
+            shard( in["_id"].String() , _key , _unqiue, instance );
         }
         _dirty = false;
     }
     
 
-    void DBConfig::CollectionInfo::shard( const string& ns , const ShardKeyPattern& key , bool unique ) {
-        _cm.reset( new ChunkManager( ns , key , unique ) );
+    void DBConfig::CollectionInfo::shard( const string& ns , const ShardKeyPattern& key , bool unique, OID instance ) {
+        _cm.reset( new ChunkManager( ns , key , unique, CollVersion( 0, 0, instance ) ) );
         _key = key.key().getOwned();
         _unqiue = unique;
         _dirty = true;
@@ -158,7 +160,7 @@ namespace mongo {
 
             log() << "enable sharding on: " << ns << " with shard key: " << fieldsAndOrder << endl;
 
-            ci.shard( ns , fieldsAndOrder , unique );
+            ci.shard( ns , fieldsAndOrder , unique, OID::gen() );
             ChunkManagerPtr cm = ci.getCM();
             uassert( 13449 , "collections already sharded" , (cm->numChunks() == 0) );
 
@@ -268,7 +270,7 @@ namespace mongo {
     ChunkManagerPtr DBConfig::getChunkManager( const string& ns , bool shouldReload, bool forceReload ) {
         BSONObj key;
         bool unique;
-        ShardChunkVersion oldVersion;
+        CollVersion oldVersion;
 
         {
             scoped_lock lk( _lock );
@@ -295,15 +297,32 @@ namespace mongo {
         verify( ! key.isEmpty() );
         
         BSONObj newest;
-        if ( oldVersion > 0 && ! forceReload ) {
+        if ( oldVersion.getVersion() > 0 && ! forceReload ) {
+
+            BSONObjBuilder query;
+            query.append( "ns", ns );
+            // Doing this will make things safer, but not backwards compatible
+            // if( oldVersion.getInstance().isSet() ) query.append( "instance", oldVersion.getInstance() );
+
             ScopedDbConnection conn( configServer.modelServer() , 30.0 );
             newest = conn->findOne( ShardNS::chunk , 
-                                    Query( BSON( "ns" << ns ) ).sort( "lastmod" , -1 ) );
+                                    Query( query.obj() ).sort( "lastmod" , -1 ) );
             conn.done();
             
             if ( ! newest.isEmpty() ) {
+
+                OID remoteInstance = ( newest["instance"].type() == jstOID ? newest["instance"].OID() : OID() );
+
+                bool instanceMatches = ! remoteInstance.isSet() || remoteInstance == oldVersion.getInstance();
+                if( ! instanceMatches ){
+                    warning() << "cached instance id for " << ns << " = " << oldVersion.getInstance() << " no longer matches collection instance " << remoteInstance << endl;
+                    reload();
+                    return getChunkManager( ns, false );
+                }
+
                 ShardChunkVersion v = newest["lastmod"];
-                if ( v == oldVersion ) {
+
+                if ( v == oldVersion.getVersion() ) {
                     scoped_lock lk( _lock );
                     CollectionInfo& ci = _collections[ns];
                     uassert( 15885 , str::stream() << "not sharded after reloading from chunks : " << ns , ci.isSharded() );
@@ -312,8 +331,8 @@ namespace mongo {
             }
 
         }
-        else if( oldVersion == 0 ){
-            warning() << "version 0 found when " << ( forceReload ? "reloading" : "checking" ) << " chunk manager"
+        else if( oldVersion.getVersion() == 0 ){
+            warning() << "version " << oldVersion << " found when " << ( forceReload ? "reloading" : "checking" ) << " chunk manager"
                       << ", collection '" << ns << "' initially detected as sharded" << endl;
         }
 
@@ -332,14 +351,14 @@ namespace mongo {
                 CollectionInfo& ci = _collections[ns];
                 if ( ci.isSharded() && ci.getCM() ) {
                     ShardChunkVersion currentVersion = newest["lastmod"];
-                    if ( currentVersion == ci.getCM()->getVersion() ) {
+                    if ( currentVersion == ci.getCM()->getVersion().getVersion() ) {
                         return ci.getCM();
                     }
                 }
                 
             }
             
-            temp.reset( new ChunkManager( ns , key , unique ) );
+            temp.reset( new ChunkManager( ns , key , unique, CollVersion( 0, 0, oldVersion.getInstance() ) ) );
             if ( temp->numChunks() == 0 ) {
                 // maybe we're not sharded any more
                 reload(); // this is a full reload
@@ -353,7 +372,7 @@ namespace mongo {
         uassert( 14822 ,  (string)"state changed in the middle: " + ns , ci.isSharded() );
         
         bool forced = false;
-        if ( temp->getVersion() > ci.getCM()->getVersion() ||
+        if ( temp->getVersion().getVersion() > ci.getCM()->getVersion().getVersion() ||
             (forced = (temp->getVersion() == ci.getCM()->getVersion() && forceReload ) ) ) {
 
             if( forced ){

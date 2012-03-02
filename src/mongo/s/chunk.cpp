@@ -485,6 +485,7 @@ namespace mongo {
         }
 
         to << "ns" << _manager->getns();
+        if( _manager->getVersion().getInstance().isSet() ) to << "instance" << _manager->getVersion().getInstance();
         to << "min" << _min;
         to << "max" << _max;
         to << "shard" << _shard.getName();
@@ -553,8 +554,8 @@ namespace mongo {
 
     AtomicUInt ChunkManager::NextSequenceNumber = 1;
 
-    ChunkManager::ChunkManager( string ns , ShardKeyPattern pattern , bool unique ) :
-        _ns( ns ) , _key( pattern ) , _unique( unique ) , _chunkRanges(), _mutex("ChunkManager"),
+    ChunkManager::ChunkManager( string ns , ShardKeyPattern pattern , bool unique, CollVersion version ) :
+        _ns( ns ) , _key( pattern ) , _unique( unique ) , _chunkRanges(), _version( version ), _mutex("ChunkManager"),
         _nsLock( ConnectionString( configServer.modelServer() , ConnectionString::SYNC ) , ns ),
 
         // The shard versioning mechanism hinges on keeping track of the number of times we reloaded ChunkManager's.
@@ -576,7 +577,7 @@ namespace mongo {
                 int ms = t.millis();
                 log() << "ChunkManager: time to load chunks for " << ns << ": " << ms << "ms" 
                       << " sequenceNumber: " << _sequenceNumber 
-                      << " version: " << _version.toString() 
+                      << " version: " << _version.toString()
                       << endl;
             }
 
@@ -608,11 +609,17 @@ namespace mongo {
         return grid.getDBConfig(getns())->getChunkManager(getns(), force);
     }
 
+    // TODO: Maybe refactor to make static or more consistent, kind of weird to load some fields but not others
     void ChunkManager::_load(ChunkMap& chunkMap, set<Shard>& shards, ShardVersionMap& shardVersions) {
         ScopedDbConnection conn( configServer.modelServer() );
 
+        BSONObjBuilder query;
+        query.append( "ns", _ns );
+        // Doing this would be safer, but not backwards-compatible with migrates
+        // if( _version.getInstance().isSet() ) query.append( "instance", _version.getInstance() );
+
         // TODO really need the sort?
-        auto_ptr<DBClientCursor> cursor = conn->query( Chunk::chunkMetadataNS, QUERY("ns" << _ns).sort("lastmod",-1), 0, 0, 0, 0,
+        auto_ptr<DBClientCursor> cursor = conn->query( Chunk::chunkMetadataNS, Query( query.obj() ), 0, 0, 0, 0,
                                           (DEBUG_BUILD ? 2 : 1000000)); // batch size. Try to induce potential race conditions in debug builds
         verify( cursor.get() );
         while ( cursor->more() ) {
@@ -626,11 +633,10 @@ namespace mongo {
             chunkMap[c->getMax()] = c;
             shards.insert(c->getShard());
             
-
             // set global max
-            if ( c->getLastmod() > _version )
-                _version = c->getLastmod();
-            
+            if ( c->getLastmod() > _version.getVersion() )
+                _version = CollVersion( c->getLastmod(), _version.getInstance() );
+
             // set shard max
             ShardChunkVersion& shardMax = shardVersions[c->getShard()];
             if ( c->getLastmod() > shardMax )
@@ -726,20 +732,21 @@ namespace mongo {
         ShardChunkVersion version;
         version.incMajor();
         
-        log() << "going to create " << splitPoints.size() + 1 << " chunk(s) for: " << _ns << endl;
+        log() << "going to create " << splitPoints.size() + 1 << " chunk(s) for: " << _ns
+              << ( _version.getInstance().isSet() ? (string)( str::stream() << " instance : " << _version.getInstance() ) : "" ) << endl;
         
         ScopedDbConnection conn( configServer.modelServer() );        
 
         for ( unsigned i=0; i<=splitPoints.size(); i++ ) {
             BSONObj min = i == 0 ? _key.globalMin() : splitPoints[i-1];
             BSONObj max = i < splitPoints.size() ? splitPoints[i] : _key.globalMax();
-            
+
             Chunk temp( this , min , max , shards[ i % shards.size() ] );
         
             BSONObjBuilder chunkBuilder;
             temp.serialize( chunkBuilder , version );
             BSONObj chunkObj = chunkBuilder.obj();
-        
+
             conn->update( Chunk::chunkMetadataNS, QUERY( "_id" << temp.genID() ), chunkObj,  true, false );
 
             version.incMinor();
@@ -891,8 +898,13 @@ namespace mongo {
         all.insert(_shards.begin(), _shards.end());
     }
 
+    // Return true if the shard version is the same in the two chunk managers
     bool ChunkManager::compatibleWith( const ChunkManager& other, const Shard& shard ) const {
-        // Return true if the shard version is the same in the two chunk managers
+
+        // If tracking instances, we should use the full CollVersion
+        if( other.getVersion().getInstance().isSet() && getVersion().getInstance().isSet() )
+            return other.getVersion() == getVersion();
+
         return other.getVersion( shard ).toLong() == getVersion( shard ).toLong();
 
     }
@@ -958,7 +970,7 @@ namespace mongo {
             // we need a special command for dropping on the d side
             // this hack works for the moment
 
-            if ( ! setShardVersion( conn.conn() , _ns , 0 , true , res ) )
+            if ( ! setShardVersion( conn.conn() , _ns , CollVersion() , true , res ) )
                 throw UserException( 8071 , str::stream() << "cleaning up after drop failed: " << res );
             conn->simpleCommand( "admin", 0, "unsetSharding" );
             conn.done();
@@ -975,7 +987,7 @@ namespace mongo {
         return i->second;
     }
 
-    ShardChunkVersion ChunkManager::getVersion() const {
+    CollVersion ChunkManager::getVersion() const {
         return _version;
     }
 
@@ -1124,11 +1136,13 @@ namespace mongo {
     // NOTE (careful when deprecating)
     //   currently the sharding is enabled because of a write or read (as opposed to a split or migrate), the shard learns
     //   its name and through the 'setShardVersion' command call
-    bool setShardVersion( DBClientBase & conn , const string& ns , ShardChunkVersion version , bool authoritative , BSONObj& result ) {
+    bool setShardVersion( DBClientBase & conn , const string& ns , CollVersion version , bool authoritative , BSONObj& result ) {
         BSONObjBuilder cmdBuilder;
         cmdBuilder.append( "setShardVersion" , ns.c_str() );
         cmdBuilder.append( "configdb" , configServer.modelServer() );
-        cmdBuilder.appendTimestamp( "version" , version.toLong() );
+        cmdBuilder.appendTimestamp( "version" , version.getVersion().toLong() );
+        // ALWAYS send instance here, it's a way we can easily detect legacy mongoses
+        cmdBuilder.append( "instance" , version.getInstance() );
         cmdBuilder.appendOID( "serverID" , &serverID );
         if ( authoritative )
             cmdBuilder.appendBool( "authoritative" , 1 );

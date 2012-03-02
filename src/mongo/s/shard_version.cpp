@@ -60,7 +60,7 @@ namespace mongo {
         mongo::mutex _mutex;
 
         // a map from a connection into ChunkManager's sequence number for each namespace
-        map<DBClientBase*, map<string,unsigned long long> > _map;
+        map<DBClientBase*, map<string,S> > _map;
 
     } connectionShardStatus;
 
@@ -212,14 +212,15 @@ namespace mongo {
                                     "version is zero" ) ) << endl;
         }
 
+        CollVersion fullVersion( version, manager ? manager->getVersion().getInstance() : OID() );
 
         LOG(2) << " have to set shard version for conn: " << conn << " ns:" << ns
                << " my last seq: " << sequenceNumber << "  current: " << officialSequenceNumber
-               << " version: " << version << " manager: " << manager.get()
+               << " version: " << fullVersion << " manager: " << manager.get()
                << endl;
 
         BSONObj result;
-        if ( setShardVersion( *conn , ns , version , authoritative , result ) ) {
+        if ( setShardVersion( *conn , ns , fullVersion , authoritative , result ) ) {
             // success!
             LOG(1) << "      setShardVersion success: " << result << endl;
             connectionShardStatus.setSequence( conn , ns , officialSequenceNumber );
