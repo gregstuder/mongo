@@ -494,9 +494,10 @@ namespace mongo {
         BSONObj min;
         BSONObj max;
         ShardChunkVersion lastmod;
+        OID collInstance;
 
         ChunkInfo() { }
-        ChunkInfo( BSONObj aMin , BSONObj aMax , ShardChunkVersion aVersion ) : min(aMin) , max(aMax) , lastmod(aVersion) {}
+        ChunkInfo( BSONObj aMin , BSONObj aMax , ShardChunkVersion aVersion, OID instance ) : min(aMin) , max(aMax) , lastmod(aVersion), collInstance(instance) {}
         void appendShortVersion( const char* name, BSONObjBuilder& b ) const;
         string toString() const;
     };
@@ -511,7 +512,9 @@ namespace mongo {
 
     string ChunkInfo::toString() const {
         ostringstream os;
-        os << "lastmod: " << lastmod.toString() << " min: " << min << " max: " << endl;
+        os << "lastmod: " << lastmod.toString() << " min: " << min << " max: " << max;
+        if( collInstance.isSet() ) os << " instance: " << collInstance;
+        os << endl;
         return os.str();
     }
     // ** end temporary **
@@ -663,13 +666,32 @@ namespace mongo {
                     return false;
                 }
 
-                if ( maxVersion < shardingState.getVersion( ns ) ) {
+                origChunk.collInstance = currChunk["instance"].type() == jstOID ? currChunk["instance"].OID() : OID();
+                CollVersion myVersion = shardingState.getVersion( ns );
+
+                // Matching previous behavior, zero-version splits are allowed here
+                if ( myVersion.getInstance().isSet() && origChunk.collInstance.isSet() && origChunk.collInstance != myVersion.getInstance() ) {
+                    errmsg = str::stream() << "official instance " << origChunk.collInstance
+                                           << " different than than mine " << myVersion.getInstance()
+                                           << " for collection " << ns;
+                    result.appendTimestamp( "officialVersion" , maxVersion );
+                    if( origChunk.collInstance.isSet() ) result.append( "officialInstance", origChunk.collInstance );
+                    result.appendTimestamp( "myVersion" , myVersion.getVersion() );
+                    if( myVersion.getInstance().isSet() ) result.append( "myInstance", myVersion.getInstance() );
+
+                    log( LL_WARNING ) << "aborted split because " << errmsg << endl;
+                    return false;
+                }
+
+                if ( maxVersion < myVersion.getVersion() ) {
                     errmsg = "official version less than mine?";
                     result.appendTimestamp( "officialVersion" , maxVersion );
-                    result.appendTimestamp( "myVersion" , shardingState.getVersion( ns ) );
+                    if( origChunk.collInstance.isSet() ) result.append( "officialInstance", origChunk.collInstance );
+                    result.appendTimestamp( "myVersion" , myVersion.getVersion() );
+                    if( myVersion.getInstance().isSet() ) result.append( "myInstance", myVersion.getInstance() );
 
-                    log( LL_WARNING ) << "aborted split because " << errmsg << ": official " << maxVersion
-                                      << " mine: " << shardingState.getVersion(ns) << endl;
+                    log( LL_WARNING ) << "aborted split because " << errmsg << ": official " << maxVersion.toString()
+                                      << " mine: " << myVersion.toString() << endl;
                     return false;
                 }
 
@@ -679,10 +701,10 @@ namespace mongo {
 
                 // since this could be the first call that enable sharding we also make sure to have the chunk manager up to date
                 shardingState.gotShardName( shard );
-                ShardChunkVersion shardVersion;
+                CollVersion shardVersion;
                 shardingState.trySetVersion( ns , shardVersion /* will return updated */ );
 
-                log() << "splitChunk accepted at version " << shardVersion << endl;
+                log() << "splitChunk accepted at version " << shardVersion.toString() << endl;
 
             }
 
@@ -723,6 +745,7 @@ namespace mongo {
                 n.append( "min" , startKey );
                 n.append( "max" , endKey );
                 n.append( "shard" , shard );
+                if( origChunk.collInstance.isSet() ) n.append( "instance", origChunk.collInstance );
                 n.done();
 
                 // add the chunk's _id as the query part of the update statement
@@ -733,7 +756,7 @@ namespace mongo {
                 updates.append( op.obj() );
 
                 // remember this chunk info for logging later
-                newChunks.push_back( ChunkInfo( startKey , endKey, myVersion ) );
+                newChunks.push_back( ChunkInfo( startKey , endKey, myVersion, origChunk.collInstance ) );
 
                 startKey = endKey;
             }

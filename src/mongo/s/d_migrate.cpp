@@ -849,6 +849,15 @@ namespace mongo {
                 }
 
                 maxVersion = x["lastmod"];
+
+                // Add instance to chunk info if present
+                if( x["instance"].type() == jstOID ){
+                    BSONObjBuilder bob;
+                    bob.appendElements( chunkInfo );
+                    bob.append( "instance", x["instance"].OID() );
+                    chunkInfo = bob.obj();
+                }
+
                 verify( currChunk["shard"].type() );
                 verify( currChunk["min"].type() );
                 verify( currChunk["max"].type() );
@@ -879,19 +888,38 @@ namespace mongo {
                     return false;
                 }
 
-                if ( maxVersion < shardingState.getVersion( ns ) ) {
+                CollVersion myVersion = shardingState.getVersion( ns );
+                OID collInstance = chunkInfo["instance"].type() == jstOID ? chunkInfo["instance"].OID() : OID();
+
+                // Matching previous behavior, zero-version migrates are allowed here
+                if ( myVersion.getInstance().isSet() && collInstance.isSet() && collInstance != myVersion.getInstance() ) {
+                    errmsg = str::stream() << "official instance " << collInstance
+                                           << " different than than mine " << myVersion.getInstance()
+                                           << " for collection " << ns;
+                    result.appendTimestamp( "officialVersion" , maxVersion );
+                    if( collInstance.isSet() ) result.append( "officialInstance", collInstance );
+                    result.appendTimestamp( "myVersion" , myVersion.getVersion() );
+                    if( myVersion.getInstance().isSet() ) result.append( "myInstance", myVersion.getInstance() );
+
+                    log( LL_WARNING ) << "aborted moveChunk because " << errmsg << endl;
+                    return false;
+                }
+
+                if ( maxVersion < myVersion.getVersion() ) {
                     errmsg = "official version less than mine?";
                     result.appendTimestamp( "officialVersion" , maxVersion );
-                    result.appendTimestamp( "myVersion" , shardingState.getVersion( ns ) );
+                    if( collInstance.isSet() ) result.append( "officialInstance", collInstance );
+                    result.appendTimestamp( "myVersion" , myVersion.getVersion() );
+                    if( myVersion.getInstance().isSet() ) result.append( "myInstance", myVersion.getInstance() );
 
-                    warning() << "aborted moveChunk because " << errmsg << ": official " << maxVersion
-                                      << " mine: " << shardingState.getVersion(ns) << migrateLog;
+                    LOG( LL_WARNING ) << "aborted moveChunk because " << errmsg << ": official " << maxVersion.toString()
+                                      << " mine: " << myVersion.toString() << migrateLog;
                     return false;
                 }
 
                 // since this could be the first call that enable sharding we also make sure to have the chunk manager up to date
                 shardingState.gotShardName( myOldShard );
-                ShardChunkVersion shardVersion;
+                CollVersion shardVersion;
                 shardingState.trySetVersion( ns , shardVersion /* will return updated */ );
 
                 log() << "moveChunk request accepted at version " << shardVersion << migrateLog;
@@ -998,7 +1026,8 @@ namespace mongo {
 
                 {
                     writelock lk( ns );
-                    verify( myVersion > shardingState.getVersion( ns ) );
+
+                    verify( myVersion > shardingState.getVersion( ns ).getVersion() );
 
                     // bump the chunks manager's version up and "forget" about the chunk being moved
                     // this is not the commit point but in practice the state in this shard won't until the commit it done
@@ -1073,6 +1102,7 @@ namespace mongo {
                     n.append( "_id" , Chunk::genID( ns , min ) );
                     n.appendTimestamp( "lastmod" , myVersion /* same as used on donateChunk */ );
                     n.append( "ns" , ns );
+                    if( chunkInfo["instance"].type() == jstOID ) n.append( "instance", chunkInfo["instance"].OID() );
                     n.append( "min" , min );
                     n.append( "max" , max );
                     n.append( "shard" , toShard.getName() );
@@ -1113,6 +1143,7 @@ namespace mongo {
                     n.append( "_id" , Chunk::genID( ns , bumpMin ) );
                     n.appendTimestamp( "lastmod" , nextVersion );
                     n.append( "ns" , ns );
+                    if( chunkInfo["instance"].type() == jstOID ) n.append( "instance", chunkInfo["instance"].OID() );
                     n.append( "min" , bumpMin );
                     n.append( "max" , bumpMax );
                     n.append( "shard" , fromShard.getName() );

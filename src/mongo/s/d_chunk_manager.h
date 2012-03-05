@@ -123,7 +123,7 @@ namespace mongo {
 
         // accessors
 
-        ShardChunkVersion getVersion() const { return _version; }
+        CollVersion getVersion() const { return _version; }
         BSONObj getKey() const { return _key.getOwned(); }
         unsigned getNumChunks() const { return _chunksMap.size(); }
 
@@ -137,7 +137,7 @@ namespace mongo {
 
         
         // highest ShardChunkVersion for which this ShardChunkManager's information is accurate
-        ShardChunkVersion _version;
+        CollVersion _version;
 
         // key pattern for chunks under this range
         BSONObj _key;

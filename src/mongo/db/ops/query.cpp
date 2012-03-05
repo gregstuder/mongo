@@ -616,7 +616,7 @@ namespace mongo {
                                         const BSONObj &query, const BSONObj &order,
                                         const shared_ptr<ParsedQuery> &pq_shared,
                                         const BSONObj &oldPlan,
-                                        const ConfigVersion &shardingVersionAtStart,
+                                        const CollVersion &shardingVersionAtStart,
                                         Message &result ) {
 
         const ParsedQuery &pq( *pq_shared );
@@ -707,12 +707,14 @@ namespace mongo {
             }
         }
         
-        if ( shardingState.getVersion( ns ) != shardingVersionAtStart ) {
+        CollVersion shardingVersionNow;
+        if ( ( shardingVersionNow = shardingState.getVersion( ns ) ) != shardingVersionAtStart ) {
             // if the version changed during the query
             // we might be missing some data
             // and its safe to send this as mongos can resend
             // at this point
-            throw SendStaleConfigException( ns , "version changed during initial query", shardingVersionAtStart, shardingState.getVersion( ns ) );
+            throw SendStaleConfigException( ns , "version changed during initial query",
+                                            shardingVersionAtStart.getVersion(), shardingVersionNow.getVersion() );
         }
 
         int nReturned = queryResponseBuilder.handoff( result );
@@ -846,7 +848,7 @@ namespace mongo {
         }
 
         Client::ReadContext ctx( ns , dbpath ); // read locks
-        const ConfigVersion shardingVersionAtStart = shardingState.getVersion( ns );
+        const CollVersion shardingVersionAtStart = shardingState.getVersion( ns );
 
         replVerifyReadsOk(&pq);
 

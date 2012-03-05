@@ -87,13 +87,13 @@ namespace mongo {
     void ShardChunkManager::_fillChunks( DBClientCursorInterface* cursor ) {
         verify( cursor );
 
-        ShardChunkVersion version;
+        CollVersion version;
         while ( cursor->more() ) {
             BSONObj d = cursor->next();
             _chunksMap.insert( make_pair( d["min"].Obj().getOwned() , d["max"].Obj().getOwned() ) );
 
-            ShardChunkVersion currVersion( d["lastmod"] );
-            if ( currVersion > version ) {
+            CollVersion currVersion( d["lastmod"], d["instance"].type() == jstOID ? d["instance"].OID() : OID() );
+            if ( currVersion.getVersion() > version.getVersion() ) {
                 version = currVersion;
             }
         }
@@ -225,21 +225,21 @@ namespace mongo {
 
         if ( _chunksMap.size() == 1 ) {
             // if left with no chunks, just reset version
-            uassert( 13590 , str::stream() << "setting version to " << version << " on removing last chunk", version == 0 );
+            uassert( 13590 , str::stream() << "setting version to " << version.toString() << " on removing last chunk", version == 0 );
 
-            p->_version = 0;
+            p->_version = CollVersion();
 
         }
         else {
             // can't move version backwards when subtracting chunks
             // this is what guarantees that no read or write would be taken once we subtract data from the current shard
-            if ( version <= _version ) {
+            if ( version <= _version.getVersion() ) {
                 uasserted( 13585 , str::stream() << "version " << version.toString() << " not greater than " << _version.toString() );
             }
 
             p->_chunksMap = this->_chunksMap;
             p->_chunksMap.erase( min );
-            p->_version = version;
+            p->_version = CollVersion( version, _version.getInstance() );
             p->_fillRanges();
         }
 
@@ -277,7 +277,7 @@ namespace mongo {
         p->_key = this->_key;
         p->_chunksMap = this->_chunksMap;
         p->_chunksMap.insert( make_pair( min.getOwned() , max.getOwned() ) );
-        p->_version = version;
+        p->_version = CollVersion( version, _version.getInstance() );
         p->_fillRanges();
 
         return p.release();
@@ -292,7 +292,7 @@ namespace mongo {
         // than the one that this shard has been using
         //
         // TODO drop the uniqueness constraint and tigthen the check below so that only the minor portion of version changes
-        if ( version <= _version ) {
+        if ( version <= _version.getVersion() ) {
             uasserted( 14039 , str::stream() << "version " << version.toString() << " not greater than " << _version.toString() );
         }
 
@@ -308,14 +308,14 @@ namespace mongo {
 
         p->_key = this->_key;
         p->_chunksMap = this->_chunksMap;
-        p->_version = version; // will increment second, third, ... chunks below
+        p->_version = CollVersion( version, _version.getInstance() ); // will increment second, third, ... chunks below
 
         BSONObj startKey = min;
         for ( vector<BSONObj>::const_iterator it = splitKeys.begin() ; it != splitKeys.end() ; ++it ) {
             BSONObj split = *it;
             p->_chunksMap[min] = split.getOwned();
             p->_chunksMap.insert( make_pair( split.getOwned() , max.getOwned() ) );
-            p->_version.incMinor();
+            p->_version.getVersion().incMinor();
             startKey = split;
         }
         p->_fillRanges();
@@ -325,7 +325,7 @@ namespace mongo {
 
     string ShardChunkManager::toString() const {
         StringBuilder ss;
-        ss << " ShardChunkManager version: " << _version << " key: " << _key;
+        ss << " ShardChunkManager version: " << _version.toString() << " key: " << _key;
         bool first = true;
         for ( RangeMap::const_iterator i=_rangesMap.begin(); i!=_rangesMap.end(); ++i ) {
             if ( first ) first = false;

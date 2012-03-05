@@ -108,10 +108,14 @@ namespace mongo {
         b.append( "id" , writebackID );
         b.append( "connectionId" , cc().getConnectionId() );
         b.append( "instanceIdent" , prettyHostName() );
-        b.appendTimestamp( "version" , shardingState.getVersion( ns ) );
+        CollVersion cachedVersion = shardingState.getVersion( ns );
+        b.appendTimestamp( "version" , cachedVersion.getVersion() );
+        if( cachedVersion.getInstance().isSet() ) b.append( "instance", cachedVersion.getInstance() );
         
         ShardedConnectionInfo* info = ShardedConnectionInfo::get( false );
-        b.appendTimestamp( "yourVersion" , info ? info->getVersion(ns) : (ConfigVersion)0 );
+        b.appendTimestamp( "yourVersion" , info ? info->getVersion(ns).getVersion() : (ConfigVersion)0 );
+        if( info && info->getVersion(ns).getInstance().isSet() )
+            b.append( "yourInstance" , info->getVersion(ns).getInstance() );
 
         b.appendBinData( "msg" , m.header()->len , bdtCustom , (char*)(m.singleData()) );
         LOG(2) << "writing back msg with len: " << m.header()->len << " op: " << m.operation() << endl;

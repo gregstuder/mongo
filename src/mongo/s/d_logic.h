@@ -56,8 +56,8 @@ namespace mongo {
         // versioning support
 
         bool hasVersion( const string& ns );
-        bool hasVersion( const string& ns , ConfigVersion& version );
-        const ConfigVersion getVersion( const string& ns ) const;
+        bool hasVersion( const string& ns , CollVersion& version );
+        const CollVersion getVersion( const string& ns ) const;
 
         /**
          * Uninstalls the manager for a given collection. This should be used when the collection is dropped.
@@ -84,7 +84,7 @@ namespace mongo {
          * @param version (IN) the client belive this collection is on and (OUT) the version the manager is actually in
          * @return true if the access can be allowed at the provided version
          */
-        bool trySetVersion( const string& ns , ConfigVersion& version );
+        bool trySetVersion( const string& ns , CollVersion& version );
 
         void appendInfo( BSONObjBuilder& b );
 
@@ -173,8 +173,8 @@ namespace mongo {
         bool hasID() const { return _id.isSet(); }
         void setID( const OID& id );
 
-        const ConfigVersion getVersion( const string& ns ) const;
-        void setVersion( const string& ns , const ConfigVersion& version );
+        const CollVersion getVersion( const string& ns ) const;
+        void setVersion( const string& ns , const CollVersion& version );
 
         static ShardedConnectionInfo* get( bool create );
         static void reset();
@@ -192,7 +192,7 @@ namespace mongo {
         OID _id;
         bool _forceVersionOk; // if this is true, then chunk version #s aren't check, and all ops are allowed
 
-        typedef map<string,ConfigVersion> NSVersionMap;
+        typedef map<string,CollVersion> NSVersionMap;
         NSVersionMap _versions;
 
         static boost::thread_specific_ptr<ShardedConnectionInfo> _tl;
