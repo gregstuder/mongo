@@ -153,7 +153,7 @@ namespace mongo {
                 _version = ShardChunkVersion();
                 _instance = OID();
                 log() << "CollVersion can't handle element " << e << endl;
-                assert(0);
+                verify(0);
             }
         }
 
@@ -182,8 +182,6 @@ namespace mongo {
         bool operator!=(const CollVersion& r) const { return r._version != _version || r._instance != _instance; }
 
     };
-
-    typedef shared_ptr<CollVersion> CollVersionPtr;
 
     /**
      * your config info for a given shard/chunk is out of date
