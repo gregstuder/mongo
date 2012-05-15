@@ -234,7 +234,24 @@ namespace mongo {
 
         // Can't lock default mutex while creating ShardChunkManager, b/c may have to create a new connection to myself
         const string c = (_configServer == _shardHost) ? "" /* local */ : _configServer;
+
+        // If our epochs aren't compatible, it's not useful to use the old manager for chunk diffs
+        if( currManager && ! currManager->getCollVersion().hasCompatibleEpoch( version ) ){
+
+            warning() << "detected incompatible version epoch in new version " << version
+                      << ", old version was " << currManager->getCollVersion() << endl;
+
+            currManager.reset();
+        }
+
         ShardChunkManagerPtr p( new ShardChunkManager( c , ns , _shardName, currManager ) );
+
+        // Handle the case where the collection isn't sharded more gracefully
+        if( p->getKey().isEmpty() ){
+            version = ConfigVersion( 0, OID() );
+            // There was an error getting any data for this collection, return false
+            return false;
+        }
 
         {
             scoped_lock lk( _mutex );
@@ -350,25 +367,6 @@ namespace mongo {
 
     void ShardedConnectionInfo::setID( const OID& id ) {
         _id = id;
-    }
-
-    // -----ShardedConnectionInfo END ----
-
-    unsigned long long extractVersion( BSONElement e , string& errmsg ) {
-        if ( e.eoo() ) {
-            errmsg = "no version";
-            return 0;
-        }
-
-        if ( e.isNumber() )
-            return (unsigned long long)e.number();
-
-        if ( e.type() == Date || e.type() == Timestamp )
-            return e._numberLong();
-
-
-        errmsg = "version is not a numeric type";
-        return 0;
     }
 
     class MongodShardCommand : public Command {
@@ -533,9 +531,7 @@ namespace mongo {
                 return false;
             }
 
-            const ConfigVersion version = ConfigVersion( extractVersion( cmdObj["version"] , errmsg ), OID() );
-            if ( errmsg.size() )
-                return false;
+            const ConfigVersion version = ConfigVersion::fromBSON( cmdObj, "version" );
             
             // step 3
 
@@ -652,7 +648,16 @@ namespace mongo {
                 if ( ! shardingState.trySetVersion( ns , currVersion ) ) {
                     errmsg = str::stream() << "client version differs from config's for collection '" << ns << "'";
                     result.append( "ns" , ns );
-                    version.addToBSON( result, "version" );
+
+                    // If this was a reset of a collection, inform mongos to do a full reload
+                    if( ! currVersion.isSet()  ){
+                        ConfigVersion( 0, OID() ).addToBSON( result, "version" );
+                        result.appendBool( "reloadConfig", true );
+                    }
+                    else{
+                        version.addToBSON( result, "version" );
+                    }
+
                     globalVersion.addToBSON( result, "globalVersion" );
                     return false;
                 }

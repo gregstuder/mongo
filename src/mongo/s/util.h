@@ -144,9 +144,12 @@ namespace mongo {
 
         // Is this in the same epoch?
         bool hasCompatibleEpoch( const ShardChunkVersion& otherVersion ) const {
+            return hasCompatibleEpoch( otherVersion._epoch );
+        }
+
+        bool hasCompatibleEpoch( const OID& otherEpoch ) const {
             // TODO : Change logic from eras are not-unequal to eras are equal
-            if( otherVersion.isEpochSet() && isEpochSet() && otherVersion._epoch != _epoch )
-                return false;
+            if( otherEpoch.isSet() && _epoch.isSet() && otherEpoch != _epoch ) return false;
             return true;
         }
 
