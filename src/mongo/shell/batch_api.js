@@ -1,5 +1,3 @@
-print("====================== batch api")
-
 //
 // Scope for the function
 //
