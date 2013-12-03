@@ -1,7 +1,7 @@
 //
-// Scope for the function
+// Scope for the function, __batch_module needed due to eval
 //
-var _batchScope = (function() {
+var __batch_module = (function() {
   // Insert types
   var NONE = 0;
   var INSERT = 1;
@@ -368,19 +368,7 @@ var _batchScope = (function() {
         currentOp = null;
         // Add the remove document to the list
         return addToOperationsList(REMOVE, document);
-      },
-
-	    tojson: function() {
-	      return this;
-	    },
-
-	    toString: function() {
-	      return "Bulk(" + tojson({ordered: ordered}) + ")";
-	    },
-
-	    shellPrint: function() {
-	      return this.toString();
-	    }    	     
+      }
     }
 
     //
@@ -394,18 +382,6 @@ var _batchScope = (function() {
       // Return the find Operations
       return findOperations;
     }
-
-		this.tojson = function() {
-      return this;
-    }
-
-    this.toString = function() {
-      return "Bulk(" + tojson({ordered: ordered}) + ")";
-    }
-
-    this.shellPrint = function() {
-      return this.toString();
-    }    	     
 
     //
     // Merge write command result into aggregated results object
@@ -434,11 +410,12 @@ var _batchScope = (function() {
         });           
       }
 
-      // Top level error should be reflected for all the operations
+      // We have a top level error and no error details, replicate error to
+      // all the original errors
       if(result.ok == 0 
-        && !Array.isArray(result.errDetails) 
-        && !ordered) {
-        
+        && result.code != MULTIPLE_ERROR
+        && !Array.isArray(result.errDetails)) {
+
         // Rewrite all the batch items as errors
         for(var i = 0; i < batch.operations.length; i++) {
           // Update the number of replication errors
@@ -455,76 +432,64 @@ var _batchScope = (function() {
           });
         }
 
-        // Short-cut as all items marked with errors
         return;
       }
 
-      // Ordered we only signal the first document as a failure
-      if(result.ok == 0 && result.code != MULTIPLE_ERROR && ordered) {
-        // Update the number of replication errors
-        if(result.code == WRITE_CONCERN_ERROR) {
-          mergeResult.wcErrors = mergeResult.wcErrors + 1;
-        }
+      // We have a top level error as well as single operation errors
+      // in errDetails, apply top level and override with errDetails ones
+      if(result.ok == 0 
+        && result.code != MULTIPLE_ERROR
+        && !ordered
+        && Array.isArray(result.errDetails)) {
+        // Error details
+        var errDetails = [];
 
-        // Add the replication error
-        mergeResult.errDetails.push({
-            index: batch.originalZeroIndex + 0
-          , code: result.code
-          , errmsg: result.errmsg
-          , op: batch.operations[0]
-        });  
-
-        // We have an array for error details, we need to rewrite the results
-        if(Array.isArray(result.errDetails)) {
-          for(var i = 0; i < result.errDetails.length; i++) {
-            // Update the number of replication errors
-            if(result.errDetails[i].code == WRITE_CONCERN_ERROR) {
-              mergeResult.wcErrors = mergeResult.wcErrors + 1;
-            }
-
-            // Add the error to errDetails
-            var errResult = {
-                index: result.errDetails[i].index + batch.originalZeroIndex
-              , code: result.errDetails[i].code
-              , errmsg: result.errDetails[i].errmsg
-              , op: batch.operations[result.errDetails[i].index]
-            };
-
-            if(result.errDetails[i].errInfo) {
-              errResult.errInfo = result.errDetails[i].errInfo;
-            }
-
-            // Overwrite the top level error with the specific errDetails error
-            mergeResult.errDetails[errResult.index] = errResult;
-          }
-        }
-
-        // Shortcut
-        return
-      }      
-
-      // We have an array for error details, we need to rewrite the results
-      if(Array.isArray(result.errDetails)) {
-        for(var i = 0; i < result.errDetails.length; i++) {
+        // Rewrite all the batch items as errors
+        for(var i = 0; i < batch.operations.length; i++) {
           // Update the number of replication errors
-          if(result.errDetails[i].code == WRITE_CONCERN_ERROR) {
+          if(result.code == WRITE_CONCERN_ERROR) {
             mergeResult.wcErrors = mergeResult.wcErrors + 1;
           }
 
-          // Add the error to errDetails
-          var errResult = {
-              index: result.errDetails[i].index + batch.originalZeroIndex
+          // Add the error to the errDetails
+          errDetails.push({
+              index: batch.originalZeroIndex + i
+            , code: result.code
+            , errmsg: result.errmsg
+            , op: batch.operations[i]           
+          });
+        }
+
+        // Apply any overriding errDetails      
+        for(var i = 0; i < result.errDetails.length; i++) {
+          errDetails[result.errDetails[i].index] = {
+              index: batch.originalZeroIndex + result.errDetails[i].index
+            , code: result.errDetails[i].code
+            , errmsg: result.errDetails[i].errmsg
+            , op: errDetails[result.errDetails[i].index].op
+          }
+        }
+
+        // Merge the error details
+        mergeResults.errDetails = mergeResults.errDetails.concat(errDetails);
+        return;
+      }
+
+      // We have errDetails we need to merge in
+      if(result.ok == 0 
+        && Array.isArray(result.errDetails)) {
+
+        // Apply any overriding errDetails      
+        for(var i = 0; i < result.errDetails.length; i++) {
+          mergeResults.errDetails.push({
+              index: batch.originalZeroIndex + result.errDetails[i].index
             , code: result.errDetails[i].code
             , errmsg: result.errDetails[i].errmsg
             , op: batch.operations[result.errDetails[i].index]
-          };
-
-          if(result.errDetails[i].errInfo) {
-            errResult.errInfo = result.errDetails[i].errInfo;
-          }
-
-          mergeResult.errDetails.push(errResult);
+          })
         }
+
+        return
       }
     }
 
@@ -596,7 +561,6 @@ var _batchScope = (function() {
     // Execute the operations, serially
     var executeBatchWithLegacyOps = function(_mergeResults, _batch) {
       var totalToExecute = _batch.operations.length;
-
       // Run over all the operations
       for(var i = 0; i < _batch.operations.length; i++) {
         var _legacyOp = new LegacyOp(_batch.batchType, _batch.operations[i], i);
@@ -672,7 +636,6 @@ var _batchScope = (function() {
 
       // We can use write commands
       if(collection._mongo.useWriteCommands()) {
-
         // Execute all the batches
         for(var i = 0; i < batches.length; i++) {
           // Execute the batch
