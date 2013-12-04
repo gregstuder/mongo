@@ -618,7 +618,7 @@
           if(result.upserted) {
             _mergeResults.nUpserted = _mergeResults.nUpserted + 1;
           } else {
-            _mergeResults.nUpdated = _mergeResults.nUpdated + 1;
+            _mergeResults.nUpdated = _mergeResults.nUpdated + result.n;
           }
         } else if(_legacyOp.batchType == REMOVE) {
           _mergeResults.n = _mergeResults.n + result.n;
