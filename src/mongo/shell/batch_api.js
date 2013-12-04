@@ -1,7 +1,7 @@
 //
-// Scope for the function, __batch_module needed due to eval
+// Scope for the function
 //
-var __batch_module = (function() {
+(function() {
   // Insert types
   var NONE = 0;
   var INSERT = 1;
@@ -53,6 +53,10 @@ var __batch_module = (function() {
     // Define properties
     defineReadOnlyProperty(this, "ok", batchResult.ok);
     defineReadOnlyProperty(this, "n", batchResult.n);
+    defineReadOnlyProperty(this, "nInserted", batchResult.nInserted);
+    defineReadOnlyProperty(this, "nUpdated", batchResult.nUpdated);
+    defineReadOnlyProperty(this, "nUpserted", batchResult.nUpserted);
+    defineReadOnlyProperty(this, "nRemoved", batchResult.nRemoved);
     
     //
     // Define access methods
@@ -113,7 +117,7 @@ var __batch_module = (function() {
     this.getWriteErrors = function() {
       var errors = [];
 
-      // No errDetails return no WCErrors
+      // No errors, return empty list
       if(!Array.isArray(batchResult.errDetails)) return errors;
 
       // Locate any non WC errors
@@ -240,7 +244,16 @@ var __batch_module = (function() {
     var currentOp;
 
     // Final results
-    var mergeResults = { n: 0, upserted: [], errDetails: [], wcErrors: 0}
+    var mergeResults = { 
+        n: 0
+      , upserted: []
+      , errDetails: []
+      , wcErrors: 0
+      , nInserted: 0
+      , nUpserted: 0
+      , nUpdated: 0
+      , nRemoved: 0      
+    }
 
     // Current batch
     var currentBatch = null;
@@ -391,8 +404,21 @@ var __batch_module = (function() {
       // Add the results
       mergeResult.n = mergeResult.n + n;
     
+      // If we have an insert Batch type
+      if(batch.batchType == INSERT) {
+        mergeResult.nInserted = mergeResult.nInserted + result.n;
+      }
+
+      // If we have an insert Batch type
+      if(batch.batchType == REMOVE) {
+        mergeResult.nRemoved = mergeResult.nRemoved + result.n;
+      }
+
       // We have an array of upserted values, we need to rewrite the indexes
       if(Array.isArray(result.upserted)) {
+        mergeResult.nUpserted = mergeResult.nUpserted + result.upserted.length;
+        mergeResult.nUpdated = mergeResult.nUpdated + (result.n - result.upserted.length);
+
         for(var i = 0; i < result.upserted.length; i++) {
           mergeResult.upserted.push({
               index: result.upserted[i].index + batch.originalZeroIndex
@@ -404,48 +430,29 @@ var __batch_module = (function() {
       // We have a single document upserted
       if(result.upserted 
         && !Array.isArray(result.upserted)) {
+        mergeResult.nUpserted = mergeResult.nUpserted + 1;
+        mergeResult.nUpdated = mergeResult.nUpdated + (result.n - 1);
         mergeResult.upserted.push({
             index: batch.originalZeroIndex
           , _id: result.upserted
         });           
       }
 
-      // We have a top level error and no error details, replicate error to
-      // all the original errors
-      if(result.ok == 0 
-        && result.code != MULTIPLE_ERROR
-        && !Array.isArray(result.errDetails)) {
-
-        // Rewrite all the batch items as errors
-        for(var i = 0; i < batch.operations.length; i++) {
-          // Update the number of replication errors
-          if(result.code == WRITE_CONCERN_ERROR) {
-            mergeResult.wcErrors = mergeResult.wcErrors + 1;
-          }
-
-          // Add the error to the errDetails
-          mergeResult.errDetails.push({
-              index: batch.originalZeroIndex + i
-            , code: result.code
-            , errmsg: result.errmsg
-            , op: batch.operations[i]           
-          });
-        }
-
-        return;
-      }
-
       // We have a top level error as well as single operation errors
       // in errDetails, apply top level and override with errDetails ones
       if(result.ok == 0 
-        && result.code != MULTIPLE_ERROR
-        && !ordered
-        && Array.isArray(result.errDetails)) {
+        && result.code != MULTIPLE_ERROR) {
         // Error details
         var errDetails = [];
+        var numberOfOperations = batch.operations.length;
+
+        // Establish if we need to cut off top level errors due to ordered
+        if(ordered && Array.isArray(result.errDetails)) {
+          numberOfOperations = result.errDetails[0].index;
+        }
 
         // Rewrite all the batch items as errors
-        for(var i = 0; i < batch.operations.length; i++) {
+        for(var i = 0; i < numberOfOperations; i++) {
           // Update the number of replication errors
           if(result.code == WRITE_CONCERN_ERROR) {
             mergeResult.wcErrors = mergeResult.wcErrors + 1;
@@ -461,13 +468,15 @@ var __batch_module = (function() {
         }
 
         // Apply any overriding errDetails      
-        for(var i = 0; i < result.errDetails.length; i++) {
-          errDetails[result.errDetails[i].index] = {
-              index: batch.originalZeroIndex + result.errDetails[i].index
-            , code: result.errDetails[i].code
-            , errmsg: result.errDetails[i].errmsg
-            , op: errDetails[result.errDetails[i].index].op
-          }
+        if(Array.isArray(result.errDetails)) {
+          for(var i = 0; i < result.errDetails.length; i++) {
+            errDetails[result.errDetails[i].index] = {
+                index: batch.originalZeroIndex + result.errDetails[i].index
+              , code: result.errDetails[i].code
+              , errmsg: result.errDetails[i].errmsg
+              , op: batch.operations[result.errDetails[i].index]
+            }
+          }          
         }
 
         // Merge the error details
@@ -525,7 +534,7 @@ var __batch_module = (function() {
         // Create a top level error
         result = { 
             ok: 0
-          , code : err.code ? err.code : INVALID_BSON_ERROR
+          , code : err.code ? err.code : UNKNOWN_ERROR
           , errmsg : err.message ? err.message : err          
         };
 
@@ -603,10 +612,17 @@ var __batch_module = (function() {
           }
         } else if(_legacyOp.batchType == INSERT) {
           _mergeResults.n = _mergeResults.n + 1;
+          _mergeResults.nInserted = _mergeResults.nInserted + 1;
         } else if(_legacyOp.batchType == UPDATE) {
           _mergeResults.n = _mergeResults.n + result.n;
+          if(result.upserted) {
+            _mergeResults.nUpserted = _mergeResults.nUpserted + 1;
+          } else {
+            _mergeResults.nUpdated = _mergeResults.nUpdated + 1;
+          }
         } else if(_legacyOp.batchType == REMOVE) {
           _mergeResults.n = _mergeResults.n + result.n;
+          _mergeResults.nRemoved = _mergeResults.nRemoved + result.n;
         }
 
         // We have an upserted field (might happen with a write concern error)

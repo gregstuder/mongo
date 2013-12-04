@@ -1,10 +1,12 @@
-var collectionName = "batch_write_protocol";
+var collectionName = "batch_api_unordered";
 var coll = db.getCollection(collectionName);
 
 jsTest.log("Starting unordered batch tests...");
 
 var request;
 var result;
+
+jsTest.log("Starting batch api unordered tests...");
 
 /********************************************************
  *
@@ -13,10 +15,13 @@ var result;
  *
  *******************************************************/
 var executeTests = function() {
+	// Remove collection
+	coll.remove({});
+
 	/**
-	 * Single successful ordered batch operation
+	 * Single successful unordered batch operation
 	 */
-	var batch = coll.initializeOrderedBulkOp();
+	var batch = coll.initializeUnorderedBulkOp();
 	batch.insert({a:1});
 	batch.find({a:1}).updateOne({$set: {b:1}});
 	batch.find({a:2}).upsert().updateOne({$set: {b:2}});
@@ -24,6 +29,7 @@ var executeTests = function() {
 	batch.find({a:3}).remove({a:3});
 	var result = batch.execute();
 	assert.eq(5, result.n);
+	assert(1, result.getErrorCount());
 	var upserts = result.getUpsertedIds();
 	assert.eq(1, upserts.length);
 	assert.eq(2, upserts[0].index);
@@ -37,18 +43,17 @@ var executeTests = function() {
 	coll.ensureIndex({a : 1}, {unique : true});
 
 	/**
-	 * Single error ordered batch operation
+	 * Single error unordered batch operation
 	 */
-	var batch = coll.initializeOrderedBulkOp();
+	var batch = coll.initializeUnorderedBulkOp();
 	batch.insert({b:1, a:1});
 	batch.find({b:2}).upsert().updateOne({$set: {a:1}});
 	batch.insert({b:3, a:2});
 	var result = batch.execute();
-
 	// Basic properties check
-	assert.eq(1, result.n);
+	assert.eq(2, result.n);
 	assert.eq(true, result.hasErrors());
-	assert.eq(1, result.getErrorCount());
+	assert(1, result.getErrorCount());
 
 	// Get the top level error
 	var error = result.getSingleError();
@@ -67,19 +72,15 @@ var executeTests = function() {
 	assert.eq(false, op.multi);
 	assert.eq(true, op.upsert);
 
-	// Get the first error
-	var error = result.getErrorAt(1);
-	assert.eq(null, error);
-
 	// Create unique index
 	coll.dropIndexes();
 	coll.remove({});
 	coll.ensureIndex({a : 1}, {unique : true});
 
 	/**
-	 * Multiple error ordered batch operation
+	 * Multiple error unordered batch operation
 	 */
-	var batch = coll.initializeOrderedBulkOp();
+	var batch = coll.initializeUnorderedBulkOp();
 	batch.insert({b:1, a:1});
 	batch.find({b:2}).upsert().updateOne({$set: {a:1}});
 	batch.find({b:3}).upsert().updateOne({$set: {a:2}});
@@ -87,11 +88,10 @@ var executeTests = function() {
 	batch.insert({b:4, a:3});
 	batch.insert({b:5, a:1});
 	var result = batch.execute();
-
 	// Basic properties check
-	assert.eq(1, result.n);
+	assert.eq(3, result.n);
 	assert.eq(true, result.hasErrors());
-	assert(1, result.getErrorCount());
+	assert(3, result.getErrorCount());
 
 	// Individual error checking
 	var error = result.getErrorAt(0);
@@ -103,65 +103,30 @@ var executeTests = function() {
 	assert.eq(false, error.getOperation().multi);
 	assert.eq(true, error.getOperation().upsert);
 
+	var error = result.getErrorAt(1);
+	assert.eq(3, error.index);
+	assert.eq(11000, error.code);
+	assert(error.errmsg != null);
+	assert.eq(2, error.getOperation().q.b);
+	assert.eq(1, error.getOperation().u['$set'].a);
+	assert.eq(false, error.getOperation().multi);
+	assert.eq(true, error.getOperation().upsert);
+
+	var error = result.getErrorAt(2);
+	assert.eq(5, error.index);
+	assert.eq(11000, error.code);
+	assert(error.errmsg != null);
+	assert.eq(5, error.getOperation().b);
+	assert.eq(1, error.getOperation().a);
+
 	// Create unique index
 	coll.dropIndexes();
 	coll.remove({});
 	coll.ensureIndex({a : 1}, {unique : true});
-
-	/**
-	 * Fail during batch construction due to single document > maxBSONSize
-	 */
-	// Set up a giant string to blow through the max message size
-	var hugeString = "";
-	// Create it bigger than 16MB
-	for(var i = 0; i < (1024 * 1100); i++) {
-		hugeString = hugeString + "1234567890123456"
-	}
-
-	// Set up the batch
-	var batch = coll.initializeOrderedBulkOp();
-	batch.insert({b:1, a:1});
-	// Should fail on insert due to string being to big
-	try {
-		batch.insert({string: hugeString});
-		assert(false);
-	} catch(err) {}
-
-	// Create unique index
-	coll.dropIndexes();
-	coll.remove({});
-
-	/**
-	 * Check that batch is split when documents overflow the BSON size
-	 */
-	// Set up a giant string to blow through the max message size
-	var hugeString = "";
-	// Create it bigger than 16MB
-	for(var i = 0; i < (1024 * 256); i++) {
-		hugeString = hugeString + "1234567890123456"
-	}
-
-	// Insert the string a couple of times, should force split into multiple batches
-	var batch = coll.initializeOrderedBulkOp();
-	batch.insert({a:1, b: hugeString});
-	batch.insert({a:2, b: hugeString});
-	batch.insert({a:3, b: hugeString});
-	batch.insert({a:4, b: hugeString});
-	batch.insert({a:5, b: hugeString});
-	batch.insert({a:6, b: hugeString});
-	var result = batch.execute();
-
-	// Basic properties check
-	assert.eq(6, result.n);
-	assert.eq(false, result.hasErrors());
-
-	// Create unique index
-	coll.dropIndexes();
-	coll.remove({});
 }
 
 // Save the existing useWriteCommands function
-var _useWriteCommands = coll._mongo.useWriteCommands;
+var _useWriteCommands = coll.getMongo().useWriteCommands;
 
 // Force the use of useWriteCommands
 coll._mongo.useWriteCommands = function() {
@@ -180,4 +145,4 @@ coll._mongo.useWriteCommands = function() {
 executeTests();
 
 // Reset the function
-coll._mongo.useWriteCommands = _useWriteCommands;
+coll.getMongo().useWriteCommands = _useWriteCommands;
