@@ -1,7 +1,7 @@
 //
 // Scope for the function
 //
-(function() {
+var __batch_api_module = (function() {
   // Insert types
   var NONE = 0;
   var INSERT = 1;
@@ -275,6 +275,10 @@
         batches.push(currentBatch);
         // Create a new batch
         currentBatch = new Batch(docType, currentIndex);  
+
+        // Reset the current size trackers
+        currentBatchSize = 0;
+        currentBatchSizeBytes = 0;
       }
 
       // Update current batch size
@@ -297,8 +301,7 @@
 
       // We have an array of documents
       if(Array.isArray(document)) {
-        currentBatch.operations = currentBatch.operations.concat(document);
-        currentIndex = currentIndex + document.length;
+        throw new "operation passed in cannot be an Array";
       } else {
         currentBatch.operations.push(document)
         currentIndex = currentIndex + 1;
@@ -618,7 +621,7 @@
           if(result.upserted) {
             _mergeResults.nUpserted = _mergeResults.nUpserted + 1;
           } else {
-            _mergeResults.nUpdated = _mergeResults.nUpdated + result.n;
+            _mergeResults.nUpdated = _mergeResults.nUpdated + 1;
           }
         } else if(_legacyOp.batchType == REMOVE) {
           _mergeResults.n = _mergeResults.n + result.n;
