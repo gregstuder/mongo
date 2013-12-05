@@ -1,7 +1,7 @@
 //
 // Scope for the function
 //
-var __batch_api_module = (function() {
+var _batch_api_module = (function() {
   // Insert types
   var NONE = 0;
   var INSERT = 1;
@@ -10,7 +10,6 @@ var __batch_api_module = (function() {
   
   // Error codes
   var UNKNOWN_ERROR = 8;
-  var INVALID_BSON_ERROR = 22;
   var WRITE_CONCERN_ERROR = 64;
   var MULTIPLE_ERROR = 65;
 
@@ -489,17 +488,17 @@ var __batch_api_module = (function() {
 
     //
     // Execute the batch
-    var executeBatch = function(_batch) {
+    var executeBatch = function(batch) {
       var cmd = null;
       var result = null;
 
       // Generate the right update
-      if(_batch.batchType == UPDATE) {
-        cmd = { update: namespace, updates: _batch.operations, ordered: ordered }
-      } else if(_batch.batchType == INSERT) {
-        cmd = { insert: namespace, documents: _batch.operations, ordered: ordered }
-      } else if(_batch.batchType == REMOVE) {
-        cmd = { delete: namespace, deletes: _batch.operations, ordered: ordered }
+      if(batch.batchType == UPDATE) {
+        cmd = { update: namespace, updates: batch.operations, ordered: ordered }
+      } else if(batch.batchType == INSERT) {
+        cmd = { insert: namespace, documents: batch.operations, ordered: ordered }
+      } else if(batch.batchType == REMOVE) {
+        cmd = { delete: namespace, deletes: batch.operations, ordered: ordered }
       }
 
       // If we have a write concern
@@ -528,7 +527,7 @@ var __batch_api_module = (function() {
       }
 
       // Merge the results
-      mergeBatchResults(_batch, mergeResults, result);
+      mergeBatchResults(batch, mergeResults, result);
     }
 
     // Execute a single legacy op
@@ -553,11 +552,11 @@ var __batch_api_module = (function() {
     }
 
     // Execute the operations, serially
-    var executeBatchWithLegacyOps = function(_mergeResults, _batch) {
-      var totalToExecute = _batch.operations.length;
+    var executeBatchWithLegacyOps = function(_mergeResults, batch) {
+      var totalToExecute = batch.operations.length;
       // Run over all the operations
-      for(var i = 0; i < _batch.operations.length; i++) {
-        var _legacyOp = new LegacyOp(_batch.batchType, _batch.operations[i], i);
+      for(var i = 0; i < batch.operations.length; i++) {
+        var _legacyOp = new LegacyOp(batch.batchType, batch.operations[i], i);
         var result = executeLegacyOp(_legacyOp);
 
         // Handle error
@@ -579,10 +578,10 @@ var __batch_api_module = (function() {
 
           // Create the emulated result set
           var errResult = {
-              index: _legacyOp.index + _batch.originalZeroIndex
+              index: _legacyOp.index + batch.originalZeroIndex
             , code: code
             , errmsg: errmsg
-            , op: _batch.operations[_legacyOp.index]
+            , op: batch.operations[_legacyOp.index]
           };
 
           if(result.errInfo) errResult.errInfo = result.errInfo;
@@ -612,7 +611,7 @@ var __batch_api_module = (function() {
 
         // We have an upserted field (might happen with a write concern error)
         if(result.upserted) _mergeResults.upserted.push({
-            index: _legacyOp.index + _batch.originalZeroIndex
+            index: _legacyOp.index + batch.originalZeroIndex
           , _id: result.upserted
         })        
       }
