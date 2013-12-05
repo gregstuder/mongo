@@ -46,7 +46,7 @@ var executeTestsUnordered = function() {
 	 */
 	// Set up a giant string to blow through the max message size
 	var hugeString = "";
-	// Create it bigger than 16MB
+	// Create 4 MB strings to test splitting
 	for(var i = 0; i < (1024 * 256); i++) {
 		hugeString = hugeString + "1234567890123456"
 	}
@@ -101,7 +101,7 @@ var executeTestsOrdered = function() {
 	 */
 	// Set up a giant string to blow through the max message size
 	var hugeString = "";
-	// Create it bigger than 16MB
+	// Create 4 MB strings to test splitting
 	for(var i = 0; i < (1024 * 256); i++) {
 		hugeString = hugeString + "1234567890123456"
 	}
