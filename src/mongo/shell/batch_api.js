@@ -417,11 +417,7 @@ var __batch_api_module = (function() {
             , _id: result.upserted[i]._id
           });
         }
-      }
-
-      // We have a single document upserted
-      if(result.upserted 
-        && !Array.isArray(result.upserted)) {
+      } else if(result.upserted) { 
         mergeResult.nUpserted = mergeResult.nUpserted + 1;
         mergeResult.nUpdated = mergeResult.nUpdated + (result.n - 1);
         mergeResult.upserted.push({
@@ -432,37 +428,27 @@ var __batch_api_module = (function() {
 
       // We have a top level error as well as single operation errors
       // in errDetails, apply top level and override with errDetails ones
-      if(result.ok == 0 
-        && result.code != MULTIPLE_ERROR) {
+      if(result.ok == 0) {
         // Error details
         var errDetails = [];
         var numberOfOperations = batch.operations.length;
 
         // Establish if we need to cut off top level errors due to ordered
         if(ordered && Array.isArray(result.errDetails)) {
-          numberOfOperations = result.errDetails[0].index;
+          numberOfOperations = result.errDetails[result.errDetails.length - 1].index;
         }
 
-        // Rewrite all the batch items as errors
-        for(var i = 0; i < numberOfOperations; i++) {
-          // Update the number of replication errors
-          if(result.code == WRITE_CONCERN_ERROR) {
-            mergeResult.wcErrors = mergeResult.wcErrors + 1;
-          }
-
-          // Add the error to the errDetails
-          errDetails.push({
-              index: batch.originalZeroIndex + i
-            , code: result.code
-            , errmsg: result.errmsg
-            , op: batch.operations[i]           
-          });
-        }
-
-        // Apply any overriding errDetails      
+        // Apply any errDetails      
         if(Array.isArray(result.errDetails)) {
           for(var i = 0; i < result.errDetails.length; i++) {
-            errDetails[result.errDetails[i].index] = {
+            var index = result.code != MULTIPLE_ERROR ? result.errDetails[i].index : i;
+
+            // Update the number of replication errors
+            if(result.errDetails[i].code == WRITE_CONCERN_ERROR) {
+              mergeResult.wcErrors = mergeResult.wcErrors + 1;
+            }
+
+            errDetails[index] = {
                 index: batch.originalZeroIndex + result.errDetails[i].index
               , code: result.errDetails[i].code
               , errmsg: result.errDetails[i].errmsg
@@ -471,26 +457,33 @@ var __batch_api_module = (function() {
           }          
         }
 
+        // Any other errors get the batch error code, if one exists
+        if(result.code != MULTIPLE_ERROR) {
+        
+          // All errors without errDetails are affected by the batch error
+          for(var i = 0; i < numberOfOperations; i++) {
+          
+            if(errDetails[i]) continue;
+          
+            // Update the number of replication errors
+            if(result.code == WRITE_CONCERN_ERROR) {
+              mergeResult.wcErrors = mergeResult.wcErrors + 1;
+            }
+
+            // Add the error to the errDetails
+            errDetails[i] = {
+                index: batch.originalZeroIndex + i
+              , code: result.code
+              , errmsg: result.errmsg
+              , op: batch.operations[i]           
+            };
+          }
+        }
+
+
         // Merge the error details
         mergeResults.errDetails = mergeResults.errDetails.concat(errDetails);
         return;
-      }
-
-      // We have errDetails we need to merge in
-      if(result.ok == 0 
-        && Array.isArray(result.errDetails)) {
-
-        // Apply any overriding errDetails      
-        for(var i = 0; i < result.errDetails.length; i++) {
-          mergeResults.errDetails.push({
-              index: batch.originalZeroIndex + result.errDetails[i].index
-            , code: result.errDetails[i].code
-            , errmsg: result.errDetails[i].errmsg
-            , op: batch.operations[result.errDetails[i].index]
-          })
-        }
-
-        return
       }
     }
 
