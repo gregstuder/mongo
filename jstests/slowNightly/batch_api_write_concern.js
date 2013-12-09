@@ -5,6 +5,7 @@ var m = MongoRunner.runMongod({ "nojournal" : "" });
 var db = m.getDB("test");
 
 var coll = db.getCollection("batch_api_write_concern");
+coll.drop();
 
 jsTest.log("Starting batch api write concern tests...");
 

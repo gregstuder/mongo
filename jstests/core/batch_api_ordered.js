@@ -1,6 +1,7 @@
 
 var collectionName = "batch_api_ordered";
 var coll = db.getCollection(collectionName);
+coll.drop();
 
 jsTest.log("Starting unordered batch tests...");
 

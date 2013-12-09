@@ -6,6 +6,7 @@ rst.initiate();
 
 var rstConn = new Mongo(rst.getURL());
 var coll = rstConn.getCollection("test.batch_write_command_repl");
+coll.drop();
 
 jsTest.log("Starting batch api replicaset tests...");
 
