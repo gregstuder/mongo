@@ -11,7 +11,6 @@ var _batch_api_module = (function() {
   // Error codes
   var UNKNOWN_ERROR = 8;
   var WRITE_CONCERN_ERROR = 64;
-  var MULTIPLE_ERROR = 65;
 
   /**
    * Helper function to define properties
@@ -48,112 +47,77 @@ var _batch_api_module = (function() {
   /**
    * Wraps the result for the commands
    */
-  var BatchWriteResult = function(batchResult) {
+  var BulkWriteResult = function(bulkResult) {
     // Define properties
-    defineReadOnlyProperty(this, "ok", batchResult.ok);
-    defineReadOnlyProperty(this, "n", batchResult.n);
-    defineReadOnlyProperty(this, "nInserted", batchResult.nInserted);
-    defineReadOnlyProperty(this, "nUpdated", batchResult.nUpdated);
-    defineReadOnlyProperty(this, "nUpserted", batchResult.nUpserted);
-    defineReadOnlyProperty(this, "nRemoved", batchResult.nRemoved);
-    
+    defineReadOnlyProperty(this, "ok", bulkResult.ok);
+    defineReadOnlyProperty(this, "nInserted", bulkResult.nInserted);
+    defineReadOnlyProperty(this, "nUpserted", bulkResult.nUpserted);
+    defineReadOnlyProperty(this, "nUpdated", bulkResult.nUpdated);
+    defineReadOnlyProperty(this, "nModified", bulkResult.nUpserted);
+    defineReadOnlyProperty(this, "nRemoved", bulkResult.nRemoved);
+
     //
     // Define access methods
     this.getUpsertedIds = function() {
-      return batchResult.upserted;
+      return bulkResult.upserted;
     }
 
     this.getUpsertedIdAt = function(index) {
-      return batchResult.upserted[index]; 
+      return bulkResult.upserted[index];
     }
 
     this.getRawResponse = function() {
-      return batchResult;
+      return bulkResult;
     }
 
-    this.getSingleError = function() {
-      if(this.hasErrors()) {
-        return new WriteError({
-            code: MULTIPLE_ERROR
-          , errmsg: "batch item errors occurred"
-          , index: 0
-        })
+    this.hasWriteErrors = function() {
+      return bulkResult.writeErrors.length > 0;
+    }
+
+    this.getWriteErrorCount = function() {
+      return bulkResult.writeErrors.length;
+    }
+
+    this.getWriteErrorAt = function(index) {
+      if(index < bulkResult.writeErrors.length) {
+        return bulkResult.writeErrors[index];
       }
-    }
-
-    this.hasErrors = function() {
-      return batchResult.errDetails.length > 0;
-    }
-
-    this.getErrorCount = function() {
-      var count = 0;
-      if(batchResult.errDetails) {
-        count = count + batchResult.errDetails.length;
-      } else if(batchResult.ok == 0) {
-        count = count + 1;
-      }
-
-      return count;
-    }
-
-    this.getErrorAt = function(index) {
-      if(batchResult.errDetails 
-        && index < batchResult.errDetails.length) {
-        return new WriteError(batchResult.errDetails[index]);
-      }
-
       return null;
     }
 
     //
     // Get all errors
-    this.getErrors = function() {
-      return batchResult.errDetails;
-    }
-
-    //
-    // Return all non wc errors
     this.getWriteErrors = function() {
-      var errors = [];
-
-      // No errors, return empty list
-      if(!Array.isArray(batchResult.errDetails)) return errors;
-
-      // Locate any non WC errors
-      for(var i = 0; i < batchResult.errDetails.length; i++) {
-        // 64 signals a write concern error
-        if(batchResult.errDetails[i].code != WRITE_CONCERN_ERROR) {
-          errors.push(new WriteError(batchResult.errDetails[i]));
-        }
-      }
-
-      // Return the errors
-      return errors;
+      return bulkResult.writeErrors;
     }
 
-    this.getWCErrors = function() {
-      var wcErrors = [];
-      // No errDetails return no WCErrors
-      if(!Array.isArray(batchResult.errDetails)) return wcErrors;
+    this.getWriteConcernError = function() {
+      if(bulkResult.writeConcernErrors.length == 0) {
+        return null;
+      } else if(bulkResult.writeConcernErrors.length == 1) {
+        // Return the error
+        bulkResult.writeConcernErrors[0];
+      } else {
 
-      // Locate any WC errors
-      for(var i = 0; i < batchResult.errDetails.length; i++) {
-        // 64 signals a write concern error
-        if(batchResult.errDetails[i].code == WRITE_CONCERN_ERROR) {
-          wcErrors.push(new WriteError(batchResult.errDetails[i]));
+        // Combine the errors
+        var errmsg = "";
+        for(var i = 0; i < bulkResult.writeConcernErrors.length; i++) {
+          var err = bulkResult.writeConcernErrors[i];
+          errmsg = errmsg + err.errmsg;
+          // TODO: Something better
+          if(i == 0) errmsg = errmsg + " and ";
         }
-      }
 
-      // Return the errors
-      return wcErrors;
+        return WriteConcernError({ errmsg : errmsg, code : WRITE_CONCERN_ERROR });
+      }
     }
 
     this.tojson = function() {
-      return batchResult;
+      return bulkResult;
     }
 
     this.toString = function() {
-      return "BatchWriteResult(" + tojson(batchResult) + ")";
+      return "BulkWriteResult(" + tojson(bulkResult) + ")";
     }
 
     this.shellPrint = function() {
@@ -161,7 +125,7 @@ var _batch_api_module = (function() {
     }
 
     this.isOK = function() {
-      return batchResult.ok == 1;
+      return bulkResult.ok == 1;
     }
   }
 
@@ -190,14 +154,35 @@ var _batch_api_module = (function() {
 
     this.shellPrint = function() {
       return this.toString();
-    }    
+    }
+  }
+
+  /**
+   * Wraps a write concern error
+   */
+  var WriteConcernError = function(err) {
+    // Define properties
+    defineReadOnlyProperty(this, "code", err.code);
+    defineReadOnlyProperty(this, "errmsg", err.errmsg);
+
+    this.tojson = function() {
+      return err;
+    }
+
+    this.toString = function() {
+      return "WriteConcernError(" + err.errmsg + ")";
+    }
+
+    this.shellPrint = function() {
+      return this.toString();
+    }
   }
 
   /**
    * Keeps the state of a unordered batch so we can rewrite the results
    * correctly after command execution
    */
-  var Batch = function(batchType, originalZeroIndex) {  
+  var Batch = function(batchType, originalZeroIndex) {
     this.originalZeroIndex = originalZeroIndex;
     this.batchType = batchType;
     this.operations = [];
@@ -229,7 +214,7 @@ var _batch_api_module = (function() {
    ***********************************************************/
   var Bulk = function(collection, ordered, options) {
     options = options == null ? {} : options;
-    
+
     // Namespace for the operation
     var self = this;
     var namespace = collection.getName();
@@ -243,16 +228,16 @@ var _batch_api_module = (function() {
     var currentOp;
 
     // Final results
-    var mergeResults = { 
-        n: 0
-      , upserted: []
-      , errDetails: []
-      , wcErrors: 0
+    var bulkResult = {
+        writeErrors: []
+      , writeConcernErrors: []
       , nInserted: 0
       , nUpserted: 0
       , nUpdated: 0
-      , nRemoved: 0      
-    }
+      , nModified: 0
+      , nRemoved: 0
+      , upserted: []
+    };
 
     // Current batch
     var currentBatch = null;
@@ -306,7 +291,7 @@ var _batch_api_module = (function() {
     var findOperations = {
       update: function(updateDocument) {
         // Set the top value for the update 0 = multi true, 1 = multi false
-        var upsert = typeof currentOp.upsert == 'boolean' ? currentOp.upsert : false;     
+        var upsert = typeof currentOp.upsert == 'boolean' ? currentOp.upsert : false;
         // Establish the update command
         var document = {
             q: currentOp.selector
@@ -323,7 +308,7 @@ var _batch_api_module = (function() {
 
       updateOne: function(updateDocument) {
         // Set the top value for the update 0 = multi true, 1 = multi false
-        var upsert = typeof currentOp.upsert == 'boolean' ? currentOp.upsert : false;     
+        var upsert = typeof currentOp.upsert == 'boolean' ? currentOp.upsert : false;
         // Establish the update command
         var document = {
             q: currentOp.selector
@@ -348,7 +333,7 @@ var _batch_api_module = (function() {
         return findOperations;
       },
 
-      removeOne: function() {   
+      removeOne: function() {
         // Establish the update command
         var document = {
             q: currentOp.selector
@@ -389,100 +374,65 @@ var _batch_api_module = (function() {
 
     //
     // Merge write command result into aggregated results object
-    var mergeBatchResults = function(batch, mergeResult, result) {
-      // Get the n
-      var n = typeof result.n != 'number' ? 0 : result.n;
-      // Add the results
-      mergeResult.n = mergeResult.n + n;
-    
+    var mergeBatchResults = function(batch, bulkResult, result) {
+
       // If we have an insert Batch type
       if(batch.batchType == INSERT) {
-        mergeResult.nInserted = mergeResult.nInserted + result.n;
+        bulkResult.nInserted = bulkResult.nInserted + result.n;
       }
 
       // If we have an insert Batch type
       if(batch.batchType == REMOVE) {
-        mergeResult.nRemoved = mergeResult.nRemoved + result.n;
+        bulkResult.nRemoved = bulkResult.nRemoved + result.n;
       }
+
+      var nUpserted = 0;
 
       // We have an array of upserted values, we need to rewrite the indexes
       if(Array.isArray(result.upserted)) {
-        mergeResult.nUpserted = mergeResult.nUpserted + result.upserted.length;
-        mergeResult.nUpdated = mergeResult.nUpdated + (result.n - result.upserted.length);
+
+        nUpserted = result.upserted.length;
 
         for(var i = 0; i < result.upserted.length; i++) {
-          mergeResult.upserted.push({
+          bulkResult.upserted.push({
               index: result.upserted[i].index + batch.originalZeroIndex
             , _id: result.upserted[i]._id
           });
         }
-      } else if(result.upserted) { 
-        mergeResult.nUpserted = mergeResult.nUpserted + 1;
-        mergeResult.nUpdated = mergeResult.nUpdated + (result.n - 1);
-        mergeResult.upserted.push({
+      } else if(result.upserted) {
+
+        nUpserted = 1;
+
+        bulkResult.upserted.push({
             index: batch.originalZeroIndex
           , _id: result.upserted
-        });           
+        });
       }
 
-      // We have a top level error as well as single operation errors
-      // in errDetails, apply top level and override with errDetails ones
-      if(result.ok == 0) {
-        // Error details
-        var errDetails = [];
-        var numberOfOperations = batch.operations.length;
+      // If we have an update Batch type
+      if(batch.batchType == UPDATE) {
+        var nModified = result.nDocsModified ? result.nDocsModified : 0;
+        bulkResult.nUpserted = bulkResult.nUpserted + nUpserted;
+        bulkResult.nUpdated = bulkResult.nUpdated + (result.n - nUpserted);
+        bulkResult.nModified = bulkResult.nModified + nModified;
+      }
 
-        // Establish if we need to cut off top level errors due to ordered
-        if(ordered && Array.isArray(result.errDetails)) {
-          numberOfOperations = result.errDetails[result.errDetails.length - 1].index;
+      if(Array.isArray(result.writeErrors)) {
+        for(var i = 0; i < result.writeErrors.length; i++) {
+
+          var writeError = {
+              index: batch.originalZeroIndex + result.writeErrors[i].index
+            , code: result.writeErrors[i].code
+            , errmsg: result.writeErrors[i].errmsg
+            , op: batch.operations[result.writeErrors[i].index]
+          };
+
+          bulkResult.writeErrors.push(new WriteError(writeError));
         }
+      }
 
-        // Apply any errDetails      
-        if(Array.isArray(result.errDetails)) {
-          for(var i = 0; i < result.errDetails.length; i++) {
-            var index = result.code != MULTIPLE_ERROR ? result.errDetails[i].index : i;
-
-            // Update the number of replication errors
-            if(result.errDetails[i].code == WRITE_CONCERN_ERROR) {
-              mergeResult.wcErrors = mergeResult.wcErrors + 1;
-            }
-
-            errDetails[index] = {
-                index: batch.originalZeroIndex + result.errDetails[i].index
-              , code: result.errDetails[i].code
-              , errmsg: result.errDetails[i].errmsg
-              , op: batch.operations[result.errDetails[i].index]
-            }
-          }          
-        }
-
-        // Any other errors get the batch error code, if one exists
-        if(result.code != MULTIPLE_ERROR) {
-        
-          // All errors without errDetails are affected by the batch error
-          for(var i = 0; i < numberOfOperations; i++) {
-          
-            if(errDetails[i]) continue;
-          
-            // Update the number of replication errors
-            if(result.code == WRITE_CONCERN_ERROR) {
-              mergeResult.wcErrors = mergeResult.wcErrors + 1;
-            }
-
-            // Add the error to the errDetails
-            errDetails[i] = {
-                index: batch.originalZeroIndex + i
-              , code: result.code
-              , errmsg: result.errmsg
-              , op: batch.operations[i]           
-            };
-          }
-        }
-
-
-        // Merge the error details
-        mergeResults.errDetails = mergeResults.errDetails.concat(errDetails);
-        return;
+      if(result.writeConcernError) {
+        bulkResult.writeConcernErrors.push(new WriteConcernError(result.writeConcernError));
       }
     }
 
@@ -506,28 +456,22 @@ var _batch_api_module = (function() {
         cmd.writeConcern = writeConcern;
       }
 
-      // Run the command
-      try {
-        // Get command collection
-        var cmdColl = collection._db.getCollection('$cmd');        
-        // Bypass runCommand to ignore slaveOk and read pref settings
-        result = new DBQuery(collection._mongo, collection._db, cmdColl, cmdColl.getFullName(), cmd,
-                        {} /* proj */, -1 /* limit */, 0 /* skip */, 0 /* batchSize */,
-                        0 /* flags */).next();
-      } catch(err) {
-        // Create a top level error
-        result = { 
-            ok: 0
-          , code : err.code ? err.code : UNKNOWN_ERROR
-          , errmsg : err.message ? err.message : err          
-        };
+      // Run the command (may throw)
 
-        // Add errInfo if available
-        if(err.errInfo) result.errInfo = err.errInfo;
+      // Get command collection
+      var cmdColl = collection._db.getCollection('$cmd');
+      // Bypass runCommand to ignore slaveOk and read pref settings
+      result = new DBQuery(collection.getMongo(), collection._db,
+                           cmdColl, cmdColl.getFullName(), cmd,
+                           {} /* proj */, -1 /* limit */, 0 /* skip */, 0 /* batchSize */,
+                           0 /* flags */).next();
+
+      if(result.ok == 0) {
+          throw "batch failed, cannot aggregate results: " + result.errmsg;
       }
 
       // Merge the results
-      mergeBatchResults(batch, mergeResults, result);
+      mergeBatchResults(batch, bulkResult, result);
     }
 
     // Execute a single legacy op
@@ -537,7 +481,7 @@ var _batch_api_module = (function() {
         collection.insert(_legacyOp.operation);
       } else if(_legacyOp.batchType == UPDATE) {
         if(_legacyOp.operation.multi) options.multi = _legacyOp.operation.multi;
-        if(_legacyOp.operation.upsert) options.upsert = _legacyOp.operation.upsert;         
+        if(_legacyOp.operation.upsert) options.upsert = _legacyOp.operation.upsert;
 
         collection.update(_legacyOp.operation.q
           , _legacyOp.operation.u, options.upsert, options.update);
@@ -548,80 +492,90 @@ var _batch_api_module = (function() {
       }
 
       // Retrieve the lastError object
-      return executeGetLastError(collection._db, writeConcern);
+      return executeGetLastError(collection.getDB(), writeConcern);
     }
 
     // Execute the operations, serially
-    var executeBatchWithLegacyOps = function(_mergeResults, batch) {
+    var executeBatchWithLegacyOps = function(batch) {
+
+      var batchResult = {
+          n: 0
+        , nDocsModified: 0
+        , writeErrors: []
+        , upserted: []
+      };
+
       var totalToExecute = batch.operations.length;
       // Run over all the operations
       for(var i = 0; i < batch.operations.length; i++) {
+
+        if(batchResult.writeErrors.length > 0 && ordered) break;
+
         var _legacyOp = new LegacyOp(batch.batchType, batch.operations[i], i);
         var result = executeLegacyOp(_legacyOp);
 
+        // Result is replication issue, rewrite error to match write command
+        if(result.wnote || result.wtimeout || result.jnote) {
+
+          // Sometimes, with replication, we get an errmsg *and* wnote/jnote/wtimeout
+
+          // Ensure we get the right error message
+          errmsg = result.wnote || errmsg;
+          errmsg = result.jnote || errmsg;
+
+          bulkResult.writeConcernErrors.push({ errmsg: errmsg, code: WRITE_CONCERN_ERROR });
+        }
+        else {
+          if(result.ok == 0) {
+            throw "legacy batch failed, cannot aggregate results: " + result.errmsg;
+          }
+        }
+
         // Handle error
-        if(result.errmsg || result.err) {
+        if(result.err) {
+
           var code = result.code || UNKNOWN_ERROR; // Returned error code or unknown code
           var errmsg = result.errmsg || result.err;
 
-          // Result is replication issue, rewrite error to match write command      
-          if(result.wnote || result.wtimeout || result.jnote) {
-            // Update the replication counters
-            _mergeResults.n = _mergeResults.n + 1;
-            _mergeResults.wcErrors = _mergeResults.wcErrors + 1;
-            // Set the code to replication error
-            code = WRITE_CONCERN_ERROR;
-            // Ensure we get the right error message
-            errmsg = result.wnote || errmsg;
-            errmsg = result.jnote || errmsg;
-          }
-
           // Create the emulated result set
           var errResult = {
-              index: _legacyOp.index + batch.originalZeroIndex
+              index: _legacyOp.index
             , code: code
             , errmsg: errmsg
             , op: batch.operations[_legacyOp.index]
           };
 
-          if(result.errInfo) errResult.errInfo = result.errInfo;
-            _mergeResults.errDetails.push(errResult);
+          batchResult.writeErrors.push(errResult);
 
-          // Check if we any errors
-          if(ordered == true 
-            && result.jnote == null 
-            && result.wnote == null 
-            && result.wtimeout == null) {
-            return new BatchWriteResult(_mergeResults);
-          }
         } else if(_legacyOp.batchType == INSERT) {
-          _mergeResults.n = _mergeResults.n + 1;
-          _mergeResults.nInserted = _mergeResults.nInserted + 1;
-        } else if(_legacyOp.batchType == UPDATE) {
-          _mergeResults.n = _mergeResults.n + result.n;
-          if(result.upserted) {
-            _mergeResults.nUpserted = _mergeResults.nUpserted + 1;
-          } else {
-            _mergeResults.nUpdated = _mergeResults.nUpdated + 1;
-          }
-        } else if(_legacyOp.batchType == REMOVE) {
-          _mergeResults.n = _mergeResults.n + result.n;
-          _mergeResults.nRemoved = _mergeResults.nRemoved + result.n;
+          // Inserts don't give us "n" back, so we can only infer
+          batchResult.n = batchResult.n + 1;
         }
 
-        // We have an upserted field (might happen with a write concern error)
-        if(result.upserted) _mergeResults.upserted.push({
-            index: _legacyOp.index + batch.originalZeroIndex
-          , _id: result.upserted
-        })        
+        if(_legacyOp.batchType == UPDATE) {
+          if(result.upserted) {
+            batchResult.n = batchResult.n + 1;
+            batchResult.upserted.push({
+                index: _legacyOp.index
+              , _id: result.upserted
+            });
+          } else if(result.n) {
+            batchResult.n = batchResult.n + result.n;
+            batchResult.nDocsModified = batchResult.nDocsModified + result.n;
+          }
+        }
+
+        if(_legacyOp.batchType == REMOVE && result.n) {
+          batchResult.n = batchResult.n + result.n;
+        }
       }
 
-      // Return the aggregated results
-      return new BatchWriteResult(_mergeResults);
+      // Merge the results
+      mergeBatchResults(batch, bulkResult, batchResult);
     }
 
     //
-    // Execute the unordered batch
+    // Execute the batch
     this.execute = function(_writeConcern) {
       if(executed) throw "batch cannot be re-executed";
 
@@ -630,44 +584,34 @@ var _batch_api_module = (function() {
 
       // If we have current batch
       if(currentBatch) batches.push(currentBatch);
-      
+
       // Total number of batches to execute
       var totalNumberToExecute = batches.length;
 
-      // We can use write commands
-      if(collection._mongo.useWriteCommands()) {
-        // Execute all the batches
-        for(var i = 0; i < batches.length; i++) {
-          // Execute the batch
+      var useWriteCommands = collection.getMongo().useWriteCommands();
+
+      // Execute all the batches
+      for(var i = 0; i < batches.length; i++) {
+
+        // Execute the batch
+        if(useWriteCommands) {
           executeBatch(batches[i]);
-          
-          // If we are ordered and have errors and they are 
-          // not all replication errors terminate the operation          
-          if(mergeResults.errDetails.length > 0 
-            && mergeResults.errDetails.length != mergeResults.wcErrors 
-            && ordered) {
-              return new BatchWriteResult(mergeResults);            
-          }
+        } else {
+          executeBatchWithLegacyOps(batches[i]);
         }
 
-        // Return the aggregated final result
-        return new BatchWriteResult(mergeResults);
-      }
-
-      // Execute in backwards compatible mode
-      for(var i = 0; i < batches.length; i++) {
-        executeBatchWithLegacyOps(mergeResults, batches[i]);
-        // If we have an ordered batch finish up processing on error
-        if(mergeResults.errDetails.length > 0 
-          && mergeResults.errDetails.length != mergeResults.wcErrors
-          && ordered) {
+        // If we are ordered and have errors and they are
+        // not all replication errors terminate the operation
+        if(bulkResult.writeErrors.length > 0 && ordered) {
+          // Ordered batches can't enforce full-batch write concern if they fail - they fail-fast
+          bulkResult.writeConcernErrors = [];
           break;
         }
       }
 
       // Execute the batch and return the final results
       executed = true;
-      return new BatchWriteResult(mergeResults);
-    }   
-  } 
+      return new BulkWriteResult(bulkResult);
+    }
+  }
 })()

@@ -3,8 +3,6 @@ var collectionName = "batch_api_ordered";
 var coll = db.getCollection(collectionName);
 coll.drop();
 
-jsTest.log("Starting unordered batch tests...");
-
 var request;
 var result;
 
@@ -27,7 +25,6 @@ var executeTests = function() {
 	batch.insert({a:3});
 	batch.find({a:3}).remove({a:3});
 	var result = batch.execute();
-	assert.eq(5, result.n);
 	assert.eq(2, result.nInserted);
 	assert.eq(1, result.nUpserted);
 	assert.eq(1, result.nUpdated);
@@ -54,17 +51,12 @@ var executeTests = function() {
 	var result = batch.execute();
 
 	// Basic properties check
-	assert.eq(1, result.n);
-	assert.eq(true, result.hasErrors());
-	assert.eq(1, result.getErrorCount());
-
-	// Get the top level error
-	var error = result.getSingleError();
-	assert.eq(65, error.code);
-	assert(error.errmsg != null);
+	assert.eq(1, result.nInserted);
+	assert.eq(true, result.hasWriteErrors());
+	assert.eq(1, result.getWriteErrorCount());
 
 	// Get the first error
-	var error = result.getErrorAt(0);
+	var error = result.getWriteErrorAt(0);
 	assert.eq(11000, error.code);
 	assert(error.errmsg != null);
 
@@ -76,7 +68,7 @@ var executeTests = function() {
 	assert.eq(true, op.upsert);
 
 	// Get the first error
-	var error = result.getErrorAt(1);
+	var error = result.getWriteErrorAt(1);
 	assert.eq(null, error);
 
 	// Create unique index
@@ -97,12 +89,12 @@ var executeTests = function() {
 	var result = batch.execute();
 
 	// Basic properties check
-	assert.eq(1, result.n);
-	assert.eq(true, result.hasErrors());
-	assert(1, result.getErrorCount());
+	assert.eq(1, result.nInserted);
+	assert.eq(true, result.hasWriteErrors());
+	assert(1, result.getWriteErrorCount());
 
 	// Individual error checking
-	var error = result.getErrorAt(0);
+	var error = result.getWriteErrorAt(0);
 	assert.eq(1, error.index);
 	assert.eq(11000, error.code);
 	assert(error.errmsg != null);

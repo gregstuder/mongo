@@ -2,8 +2,6 @@ var collectionName = "batch_api_unordered";
 var coll = db.getCollection(collectionName);
 coll.drop();
 
-jsTest.log("Starting unordered batch tests...");
-
 var request;
 var result;
 
@@ -29,8 +27,11 @@ var executeTests = function() {
 	batch.insert({a:3});
 	batch.find({a:3}).remove({a:3});
 	var result = batch.execute();
-	assert.eq(5, result.n);
-	assert(1, result.getErrorCount());
+	assert.eq(2, result.nInserted);
+	assert.eq(1, result.nUpserted);
+	assert.eq(1, result.nUpdated);
+	assert.eq(1, result.nRemoved);
+	assert(1, result.getWriteErrorCount());
 	var upserts = result.getUpsertedIds();
 	assert.eq(1, upserts.length);
 	assert.eq(2, upserts[0].index);
@@ -52,17 +53,12 @@ var executeTests = function() {
 	batch.insert({b:3, a:2});
 	var result = batch.execute();
 	// Basic properties check
-	assert.eq(2, result.n);
-	assert.eq(true, result.hasErrors());
-	assert(1, result.getErrorCount());
-
-	// Get the top level error
-	var error = result.getSingleError();
-	assert.eq(65, error.code);
-	assert(error.errmsg != null);
+	assert.eq(2, result.nInserted);
+	assert.eq(true, result.hasWriteErrors());
+	assert(1, result.getWriteErrorCount());
 
 	// Get the first error
-	var error = result.getErrorAt(0);
+	var error = result.getWriteErrorAt(0);
 	assert.eq(11000, error.code);
 	assert(error.errmsg != null);
 
@@ -90,13 +86,13 @@ var executeTests = function() {
 	batch.insert({b:5, a:1});
 	var result = batch.execute();
 	// Basic properties check
-	assert.eq(3, result.n);
-	assert.eq(true, result.hasErrors());
-	assert(3, result.getErrorCount());
+	assert.eq(2, result.nInserted);
+	assert.eq(1, result.nUpserted);
+	assert.eq(true, result.hasWriteErrors());
+	assert(3, result.getWriteErrorCount());
 
 	// Individual error checking
-	var error = result.getErrorAt(0);
-	assert.eq(1, error.index);
+	var error = result.getWriteErrorAt(0);
 	assert.eq(11000, error.code);
 	assert(error.errmsg != null);
 	assert.eq(2, error.getOperation().q.b);
@@ -104,7 +100,7 @@ var executeTests = function() {
 	assert.eq(false, error.getOperation().multi);
 	assert.eq(true, error.getOperation().upsert);
 
-	var error = result.getErrorAt(1);
+	var error = result.getWriteErrorAt(1);
 	assert.eq(3, error.index);
 	assert.eq(11000, error.code);
 	assert(error.errmsg != null);
@@ -113,7 +109,7 @@ var executeTests = function() {
 	assert.eq(false, error.getOperation().multi);
 	assert.eq(true, error.getOperation().upsert);
 
-	var error = result.getErrorAt(2);
+	var error = result.getWriteErrorAt(2);
 	assert.eq(5, error.index);
 	assert.eq(11000, error.code);
 	assert(error.errmsg != null);
